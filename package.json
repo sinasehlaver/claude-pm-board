@@ -1,0 +1,48 @@
+{
+  "name": "claude-pm-board",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently \"node --watch server/index.mjs\" \"vite --config web/vite.config.js\"",
+    "build": "vite --config web/vite.config.js build",
+    "start": "node server/index.mjs",
+    "app": "npm run build && electron .",
+    "app:pack": "npm run build && electron-builder --dir",
+    "app:dmg": "npm run build && electron-builder",
+    "test": "node --test server/*.test.mjs",
+    "verify": "bash scripts/verify.sh"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.2.4",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.11",
+    "vite-plugin-pwa": "^0.21.1"
+  },
+  "build": {
+    "appId": "io.github.sinasehlaver.pm",
+    "productName": "PM",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**",
+      "server/**",
+      "web/dist/**",
+      "package.json"
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity"
+    }
+  }
+}
