@@ -43,3 +43,33 @@ test("missing sections default to 'none'", () => {
   assert.equal(s.blockers, "none");
   assert.deepEqual(s.next, []);
 });
+
+const CANON_MULTILINE = `# hub — state
+Updated: 2026-09-11
+
+## Now
+- [ ] Fixed the status headline bug
+  - stripped the marker per-line, not just the first
+  - added sub-bullets for detail points
+
+## Next
+- P2 connectors/feeds
+
+## Last failure
+none
+
+## Blockers
+none
+`;
+
+test("Now headline + detail bullets parse into newline-joined lines, markers stripped", () => {
+  const s = parseState(CANON_MULTILINE, "hub");
+  assert.equal(
+    s.now,
+    "Fixed the status headline bug\nstripped the marker per-line, not just the first\nadded sub-bullets for detail points",
+  );
+});
+
+test("multi-line Now round-trips byte-identical", () => {
+  assert.equal(serializeState(parseState(CANON_MULTILINE, "hub")), CANON_MULTILINE);
+});

@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { ago, send } from "./api";
+import Help from "./Help.jsx";
 
 const STATES = ["Doing", "Todo", "Blocked", "Done"];
 const KIND = { commit: "●", handoff: "⇄", plan: "▤" };
 
 export default function Project({ slug, data, projects, onBack, reload }) {
   const [editing, setEditing] = useState(false);
+  const [showStatus, setShowStatus] = useState(false);
+  const [doneOpen, setDoneOpen] = useState(false);
 
   if (!data)
     return (
@@ -56,65 +59,87 @@ export default function Project({ slug, data, projects, onBack, reload }) {
 
       <section className="block">
         <div className="block-head">
-          <h2>Status</h2>
-          <button className="link" onClick={() => setEditing((v) => !v)}>
-            {editing ? "cancel" : "edit"}
+          <span className="block-head-title">
+            <h2>Status</h2>
+            <Help text="A short hand-written summary of where this project stands — what's happening now, what's next, and any blockers. Not auto-generated." />
+          </span>
+          <button className="link" onClick={() => setShowStatus(true)}>
+            {state ? "view / edit" : "add"}
           </button>
         </div>
-        {editing ? (
-          <StatusForm state={state} onSave={patchState} />
-        ) : state ? (
-          <dl className="status-dl">
-            <dt>Now</dt>
-            <dd>{state.now || "—"}</dd>
-            <dt>Next</dt>
-            <dd>
-              {state.next.length ? (
-                <ul>
-                  {state.next.map((n, i) => (
-                    <li key={i}>{n}</li>
-                  ))}
-                </ul>
-              ) : (
-                "—"
-              )}
-            </dd>
-            <dt>Last failure</dt>
-            <dd>{state.lastFailure}</dd>
-            <dt>Blockers</dt>
-            <dd>{state.blockers}</dd>
-          </dl>
-        ) : (
-          <p className="muted">No state file. Add one via edit.</p>
-        )}
+        <p className="status-preview clamp" onClick={() => setShowStatus(true)}>
+          {state?.now || <em className="muted">no status</em>}
+        </p>
       </section>
+
+      {showStatus && (
+        <StatusSheet
+          state={state}
+          editing={editing}
+          onEdit={setEditing}
+          onSave={patchState}
+          onClose={() => {
+            setShowStatus(false);
+            setEditing(false);
+          }}
+        />
+      )}
 
       <section className="block">
         <div className="block-head">
-          <h2>Backlog</h2>
+          <span className="block-head-title">
+            <h2>Backlog</h2>
+            <Help text="Your task list, grouped by state (Doing / Todo / Blocked / Done). Each task has a ▶ button to launch a Claude Code session on it, a @seq flag to include it in batch orchestration, and a priority pill." />
+          </span>
           {tasks.some((t) => t.seq && t.state !== "Done") && (
-            <button className="link" onClick={runSeq} title="orchestrate @seq todos">
-              ▶▶ Run @seq
-            </button>
+            <span className="bar-item">
+              <button className="link" onClick={runSeq} title="orchestrate @seq todos">
+                ▶▶ Run @seq
+              </button>
+              <Help text="Launches one Claude Code session that works through every @seq-flagged task in this project's backlog, one after another." />
+            </span>
           )}
         </div>
         <AddRow onAdd={addTask} />
         {STATES.map((st) => {
           const rows = tasks.filter((t) => t.state === st);
           if (!rows.length) return null;
+          const isDone = st === "Done";
+          const open = !isDone || doneOpen;
           return (
             <div key={st} className="tg">
-              <h3>{st}</h3>
-              {rows.map((t) => (
-                <Task
-                  key={t.id}
-                  t={t}
-                  onEdit={editTask}
-                  onDel={delTask}
-                  onBuild={buildTask}
-                  onMove={isIdeas ? moveTask : null}
-                />
-              ))}
+              {isDone ? (
+                <h3
+                  className="tg-toggle"
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={doneOpen}
+                  onClick={() => setDoneOpen((v) => !v)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setDoneOpen((v) => !v);
+                    }
+                  }}
+                >
+                  <span className={`chevron${doneOpen ? " open" : ""}`}>▸</span>
+                  {doneOpen ? "Done" : `Done (${rows.length})`}
+                  <Help text="Finished tasks, tucked away by default so the active list stays short. Click here to show or hide them." />
+                </h3>
+              ) : (
+                <h3>{st}</h3>
+              )}
+              {open &&
+                rows.map((t) => (
+                  <Task
+                    key={t.id}
+                    t={t}
+                    onEdit={editTask}
+                    onDel={delTask}
+                    onBuild={buildTask}
+                    onMove={isIdeas ? moveTask : null}
+                  />
+                ))}
             </div>
           );
         })}
@@ -124,7 +149,10 @@ export default function Project({ slug, data, projects, onBack, reload }) {
       {sessions && sessions.length > 0 && (
         <section className="block">
           <div className="block-head">
-            <h2>Sessions</h2>
+            <span className="block-head-title">
+              <h2>Sessions</h2>
+              <Help text="Claude Code conversations already linked to this project. Reopen one to pick up where it left off." />
+            </span>
           </div>
           {sessions.map((s) => (
             <div key={s.id} className="task">
@@ -178,6 +206,73 @@ function Bar({ title, onBack }) {
   );
 }
 
+function StatusSheet({ state, editing, onEdit, onSave, onClose }) {
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <span className="block-head-title">
+            <h2>Status</h2>
+            <Help text="Now = what's actively being worked on. Next = the short queue after that. Last failure and Blockers flag anything stuck." />
+          </span>
+          <div className="bar-actions">
+            <button className="link" onClick={() => onEdit((v) => !v)}>
+              {editing ? "cancel" : "edit"}
+            </button>
+            <button className="link" onClick={onClose}>
+              done
+            </button>
+          </div>
+        </div>
+        {editing ? (
+          <StatusForm state={state} onSave={onSave} />
+        ) : state ? (
+          <dl className="status-dl">
+            <dt>Now</dt>
+            <dd>
+              {(() => {
+                const lines = (state.now || "").split("\n").map((l) => l.trim()).filter(Boolean);
+                if (!lines.length) return "—";
+                const [headline, ...details] = lines;
+                return (
+                  <>
+                    <p className="now-headline">{headline}</p>
+                    {details.length > 0 && (
+                      <ul>
+                        {details.map((l, i) => (
+                          <li key={i}>{l}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                );
+              })()}
+            </dd>
+            <dt>Next</dt>
+            <dd>
+              {state.next.length ? (
+                <ul>
+                  {state.next.map((n, i) => (
+                    <li key={i}>{n}</li>
+                  ))}
+                </ul>
+              ) : (
+                "—"
+              )}
+            </dd>
+            <dt>Last failure</dt>
+            <dd>{state.lastFailure}</dd>
+            <dt>Blockers</dt>
+            <dd>{state.blockers}</dd>
+          </dl>
+        ) : (
+          <p className="muted">No state file. Add one via edit.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function StatusForm({ state, onSave }) {
   const s = state || { now: "", next: [], lastFailure: "none", blockers: "none" };
   const [now, setNow] = useState(s.now);
@@ -187,8 +282,8 @@ function StatusForm({ state, onSave }) {
   return (
     <div className="form">
       <label>
-        Now
-        <input value={now} onChange={(e) => setNow(e.target.value)} />
+        Now (first line = headline, rest become sub-bullets)
+        <textarea rows={4} value={now} onChange={(e) => setNow(e.target.value)} />
       </label>
       <label>
         Next (one per line)

@@ -24,11 +24,31 @@ function splitSections(body) {
   return out;
 }
 
+// "## Now" is a headline (`- [ ]`/`- [x]` line) optionally followed by indented
+// `  - ` detail bullets. Parsed into one string, one point per line, markers
+// stripped — serializeState re-adds them so the .md stays readable as a list.
+function parseNow(section) {
+  return (section || "")
+    .split("\n")
+    .map((l, i) =>
+      i === 0 ? l.replace(/^-\s*\[[ xX]\]\s*/, "") : l.replace(/^\s*-\s*/, ""),
+    )
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function serializeNow(now) {
+  const lines = (now || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return "- [ ] ";
+  return [`- [ ] ${lines[0]}`, ...lines.slice(1).map((l) => `  - ${l}`)].join("\n");
+}
+
 export function parseState(text, slug) {
   const titleM = text.match(/^#\s+(.+?)\s*$/m);
   const updM = text.match(/^Updated:\s*(.+?)\s*$/m);
   const sec = splitSections(text);
-  const now = (sec["Now"] || "").replace(/^-\s*\[[ xX]\]\s*/, "").trim();
+  const now = parseNow(sec["Now"]);
   const next = (sec["Next"] || "")
     .split("\n")
     .map((l) => l.replace(/^-\s+/, "").trim())
@@ -51,7 +71,7 @@ export function serializeState(s, { refreshDate = false } = {}) {
     `Updated: ${updated}`,
     "",
     "## Now",
-    `- [ ] ${s.now || ""}`.trimEnd(),
+    serializeNow(s.now),
     "",
     "## Next",
     ...(s.next && s.next.length ? s.next.map((n) => `- ${n}`) : []),

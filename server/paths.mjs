@@ -1,9 +1,14 @@
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // PM_ROOT is the workspace root that owns the .claude/ dir we read & write.
-// Set it to your projects folder; it defaults to the process working directory.
-// Verify runs and tests point it at a temp fixture.
-export const PM_ROOT = process.env.PM_ROOT || process.cwd();
+// Set it to your projects folder to override. Defaults to the parent of this
+// package (pm/ is expected to live directly under the workspace it manages),
+// not process.cwd() — npm always runs `dev`/`start` with cwd = pm/, which has
+// no .claude/state of its own and would silently render an empty board.
+// Verify runs and tests override this explicitly via env.
+const DEFAULT_PM_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+export const PM_ROOT = process.env.PM_ROOT || DEFAULT_PM_ROOT;
 export const CLAUDE = join(PM_ROOT, ".claude");
 export const STATE_DIR = join(CLAUDE, "state");
 export const RULES_DIR = join(CLAUDE, "rules");
