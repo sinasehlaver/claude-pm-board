@@ -382,6 +382,65 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 .ctable tr.bad td { color: var(--bad); }
 .ctable tr:hover td { background: var(--surface2); }
 
+/* usage */
+.usage-stats { font-size: 14px; }
+.usage-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+.usage-cols { display: flex; align-items: flex-end; gap: 6px; height: 120px; padding-top: 18px; }
+.usage-col { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; min-width: 0; }
+.usage-col-v { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-col-track {
+  flex: 1; width: 100%; max-width: 18px; display: flex; align-items: flex-end;
+  background: var(--surface2); border-radius: 4px; overflow: hidden; margin-top: 2px;
+}
+.usage-col-fill { display: block; width: 100%; background: var(--accent); transition: height 0.3s var(--ease); }
+.usage-col-label { margin-top: 6px; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-pace { color: var(--accent); }
+.usage-pace b { color: var(--accent); }
+
+.radial-row { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; padding: 4px 0 8px; }
+.radial-card { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 1; min-width: 108px; max-width: 160px; }
+.radial { width: 100px; height: 100px; }
+.radial-track { fill: none; stroke: var(--surface2); stroke-width: 9; }
+.radial-fill { fill: none; stroke: var(--accent); stroke-width: 9; transition: stroke-dasharray 0.3s var(--ease); }
+.radial-fill.bad { stroke: var(--bad); }
+.radial-pct { font-size: 18px; font-weight: 600; fill: var(--text); font-variant-numeric: tabular-nums; }
+.radial-label { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.radial-nums { font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; text-align: center; }
+.radial-reset { font-size: 11px; color: var(--muted); text-align: center; }
+.radial-cap-note { font-size: 10px; color: var(--muted); text-align: center; }
+.radial-pct.muted { fill: var(--muted); font-size: 15px; }
+
+.limit-mode-seg { max-width: 280px; margin: 2px auto 4px; }
+.limit-mode-seg button { padding: 6px 0; font-size: 12px; }
+.limit-manual-row { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%; margin-top: 6px; }
+.limit-manual-input-wrap { display: flex; align-items: center; gap: 3px; width: 100%; }
+.limit-manual-prefix { color: var(--muted); font-size: 12px; }
+.limit-manual-row input {
+  width: 100%; text-align: center; font-size: 12px; padding: 5px 6px; border-radius: var(--radius-xs);
+  border: 1px solid var(--line); background: var(--surface); color: var(--text);
+}
+.limit-manual-row input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.limit-manual-hint { font-size: 10px; color: var(--muted); }
+.burn-strip-row { display: flex; align-items: center; gap: 8px; margin: 8px 12px 0; }
+.burn-strip {
+  display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;
+  padding: 8px 12px; border-radius: var(--radius-xs); border: 1px solid var(--line);
+  background: var(--surface); color: var(--muted); font-size: 12.5px; cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.burn-strip:hover { background: var(--surface2); border-color: var(--accent); }
+.burn-strip span:first-child { color: var(--text); font-weight: 600; }
+
+.block-head-controls { display: flex; align-items: center; gap: 8px; }
+.block-head-controls .seg { margin-top: 0; }
+.usage-refresh {
+  font: inherit; font-size: 12px; color: var(--text); background: var(--surface2);
+  border: 1px solid var(--line); border-radius: var(--radius-xs); padding: 5px 7px;
+  cursor: pointer; transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+}
+.usage-refresh:hover { border-color: color-mix(in srgb, var(--line) 40%, var(--muted)); }
+.usage-refresh:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+
 /* help button + tooltip */
 .help { position: relative; display: inline-flex; vertical-align: middle; }
 .help-btn {

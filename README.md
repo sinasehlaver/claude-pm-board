@@ -196,6 +196,22 @@ the top. Once you know which project an idea belongs to, open the Ideas project 
 use its tasks' **▸** ("move to project") button to relocate it — this moves the
 backlog entry to the target project's `Todo` section (`POST /api/tasks/move`).
 
+The Ideas project's **▶** and **▶▶ Run @seq** buttons behave differently from every
+other project's, because `server/launch.mjs` branches on `slug === "ideas"`:
+
+- **▶ on a single idea** launches a *research-only* session: it triages the idea
+  (genuine business/venture concept → the `venturemind` skill; otherwise a personal
+  tool → the `atelier` skill, research steps only, no build) and leaves a note on the
+  idea's bullet pointing at the resulting write-up. The idea itself stays in Todo —
+  nothing gets built or promoted yet.
+- **▶▶ Run @seq on a batch of `@seq`-flagged ideas** promotes each one into a real pm
+  project: a subagent per idea creates `PM_ROOT/<slug>/` with a `CONTEXT.md` (full
+  research + implementation plan, and — for personal-tool ideas — `atelier`'s actual
+  build, not just a plan), a `.claude/state/<slug>.md`, and a `.claude/backlog/<slug>.md`
+  seeded with one Todo per implementation phase, then removes the idea's bullet from
+  `ideas.md`. From there the new project behaves like any other — its own ▶ / Run @seq
+  buttons pick up where promotion left off.
+
 ### Sessions inbox
 
 The **Sessions** view lists Claude Code conversations harvested from
@@ -252,6 +268,27 @@ a visible terminal running it, and pm only reads/displays its state files
 (`.claude/continuous/{state.json,log.jsonl,plans/,runner.lock}`) and a few of its pure
 logic modules in-process. If `continuous/` isn't present, pm boots fine and the tab
 shows a short explainer instead.
+
+### Usage tab: burn rate and cost
+
+The **Usage** link on the home screen opens a dashboard over your Claude Code token
+usage, and the home screen itself shows a compact burn-rate strip that links into it.
+This is a self-contained feature — pm parses `~/.claude/projects/**/*.jsonl` directly,
+so it works with no other project installed or running (it reuses the calculation
+mechanics from `claude_usage_dashboard` and `continuous`, not those apps themselves):
+
+- **Burn rate** — rolling token totals over the last 1h/5h/7d, across every session on
+  the machine (main sessions + subagent/tool-result transcripts, deduped by message id).
+  These are the same windows the "Run @seq" orchestrator paces its batches against.
+- **Rate-limit ceiling** — your account's %-of-limit from
+  `~/.claude/vscode-claude-status-cache.json` (the same file the VS Code extension
+  writes), flagged **stale** if it's more than ~15 minutes old.
+- **Last 14 days** — a per-day token/cost bar chart plus a total estimate.
+- **By model** — token and cost totals grouped by model.
+
+Cost is an estimate from a hardcoded per-model pricing table in `web/src/pricing.js`
+(ported from `claude_usage_dashboard`'s pricing grid) — cross-check against
+anthropic.com for current rates, not a billing statement.
 
 ### Progressive web app / desktop shell
 

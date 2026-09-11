@@ -4,6 +4,7 @@ import Home from "./Home.jsx";
 import Project from "./Project.jsx";
 import Sessions from "./Sessions.jsx";
 import Continuous from "./Continuous.jsx";
+import Usage from "./Usage.jsx";
 import Help from "./Help.jsx";
 
 const THEME_KEY = "pm.theme";
@@ -38,18 +39,21 @@ function ThemeToggle() {
 //   "/"               -> home
 //   "/sessions"        -> sessions
 //   "/continuous"       -> continuous
+//   "/usage"           -> usage
 //   "/project/<slug>"  -> project view for slug
 function parsePath(pathname) {
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] === "project" && parts[1]) return { view: "home", sel: decodeURIComponent(parts[1]) };
   if (parts[0] === "sessions") return { view: "sessions", sel: null };
   if (parts[0] === "continuous") return { view: "continuous", sel: null };
+  if (parts[0] === "usage") return { view: "usage", sel: null };
   return { view: "home", sel: null };
 }
 function pathFor(view, sel) {
   if (sel) return "/project/" + encodeURIComponent(sel);
   if (view === "sessions") return "/sessions";
   if (view === "continuous") return "/continuous";
+  if (view === "usage") return "/usage";
   return "/";
 }
 
@@ -58,7 +62,7 @@ export default function App() {
   const [sessions, setSessions] = useState({ inbox: [], filed: [] });
   const [cont, setCont] = useState({ status: null, log: [] });
   const initial = parsePath(window.location.pathname);
-  const [view, setView] = useState(initial.view); // "home" | "sessions" | "continuous"
+  const [view, setView] = useState(initial.view); // "home" | "sessions" | "continuous" | "usage"
   const [sel, setSel] = useState(initial.sel);
   const [detail, setDetail] = useState(null);
   const fromPopstate = useRef(false);
@@ -139,6 +143,8 @@ export default function App() {
     />
   ) : view === "continuous" ? (
     <Continuous status={cont.status} log={cont.log} onBack={() => setView("home")} reload={loadCont} />
+  ) : view === "usage" ? (
+    <Usage onBack={() => setView("home")} />
   ) : (
     <Home
       projects={projects}
@@ -146,6 +152,7 @@ export default function App() {
       onOpen={setSel}
       onSessions={() => setView("sessions")}
       onContinuous={() => setView("continuous")}
+      onUsage={() => setView("usage")}
       reload={loadList}
     />
   );

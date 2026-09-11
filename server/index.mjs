@@ -10,6 +10,15 @@ import { readBacklog, writeBacklog, emptyBacklog } from "./backlog.mjs";
 import { listSessions, fileSession, sessionToTask, moveTask } from "./sessions.mjs";
 import { seedForTask, seedForSequentialRun, launchClaude } from "./launch.mjs";
 import * as continuous from "./continuous.mjs";
+import {
+  burnSnapshot,
+  burnBreakdown,
+  summary,
+  accountRateLimitStatus,
+  paceBreakdown,
+  PACE_WINDOW_MS,
+  writeUsageLimitsWindow,
+} from "./usage.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4500;
@@ -299,6 +308,45 @@ app.post("/api/continuous/clear-failure", async (req, res, next) => {
     res.json(await continuous.readStatus());
   } catch (e) {
     next(e);
+  }
+});
+
+// --- usage / burn rate -------------------------------------------------
+app.get("/api/usage/burn", async (_req, res, next) => {
+  try {
+    const breakdown = await burnBreakdown();
+    breakdown.pace = await paceBreakdown();
+    res.json({
+      ...(await burnSnapshot()),
+      breakdown,
+      paceWindowMs: PACE_WINDOW_MS,
+      limits: await accountRateLimitStatus(),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+app.get("/api/usage/summary", async (req, res, next) => {
+  try {
+    const bucket = req.query.bucket === "hour" ? "hour" : "day";
+    const days = Math.min(Number(req.query.days) || 14, 90);
+    res.json(await summary({ bucket, days }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// window: "5h"|"7d"|"30d"; body: { mode?, manualCapTokens? } — a manual value
+// persists exactly as set until this route (or a manual re-edit) changes it,
+// unauthenticated like the rest of pm (matches hub/).
+app.put("/api/usage/limits/:window", async (req, res, next) => {
+  try {
+    const { mode, manualCapTokens } = req.body || {};
+    const cfg = writeUsageLimitsWindow(req.params.window, { mode, manualCapTokens });
+    res.json(cfg);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
   }
 });
 

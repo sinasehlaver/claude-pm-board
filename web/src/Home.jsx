@@ -1,6 +1,18 @@
-import { useState } from "react";
-import { ago, send } from "./api";
+import { useEffect, useState } from "react";
+import { ago, get, send } from "./api";
 import Help from "./Help.jsx";
+import { costFor, tokensFor } from "./pricing.js";
+import { loadUnit, REFRESH_KEY, loadRefreshSec, RefreshSelect } from "./usageSettings.jsx";
+
+const k = (n) => (n == null ? "—" : n >= 1000 ? Math.round(n / 1000).toLocaleString() + "k" : String(Math.round(n)));
+const usd = (n) => (n == null ? "—" : "$" + n.toFixed(n < 1 ? 3 : 2));
+
+// sum a set of per-model token rows into a single $ or token figure, matching
+// the unit set on the Usage page (see usageSettings.jsx).
+function burnFigure(rows, unit) {
+  const sum = (rows || []).reduce((s, r) => s + (unit === "cost" ? costFor(r) : tokensFor(r)), 0);
+  return unit === "cost" ? usd(sum) : k(sum);
+}
 
 const HIDDEN_KEY = "pm.hiddenSlugs";
 
@@ -14,10 +26,28 @@ function loadHidden() {
   }
 }
 
-export default function Home({ projects, inboxCount, onOpen, onSessions, onContinuous, reload }) {
+export default function Home({ projects, inboxCount, onOpen, onSessions, onContinuous, onUsage, reload }) {
   const [idea, setIdea] = useState("");
   const [hidden, setHidden] = useState(loadHidden);
   const [showFilter, setShowFilter] = useState(false);
+  const [burn, setBurn] = useState(null);
+  const [unit] = useState(loadUnit);
+  const [refreshSec, setRefreshSec] = useState(loadRefreshSec);
+
+  useEffect(() => {
+    function load() {
+      get("/usage/burn").then(setBurn).catch(() => {});
+    }
+    load();
+    if (!refreshSec) return;
+    const id = setInterval(load, refreshSec * 1000);
+    return () => clearInterval(id);
+  }, [refreshSec]);
+
+  function changeRefresh(sec) {
+    localStorage.setItem(REFRESH_KEY, String(sec));
+    setRefreshSec(sec);
+  }
 
   function toggleHidden(slug) {
     setHidden((prev) => {
@@ -69,6 +99,12 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onConti
         <h1>Projects</h1>
         <div className="bar-actions">
           <span className="bar-item">
+            <button className="link" onClick={onUsage}>
+              Usage
+            </button>
+            <Help text="Token/cost burn rate across every Claude Code session on this machine, and your account's rate-limit ceiling." />
+          </span>
+          <span className="bar-item">
             <button className="link" onClick={onContinuous}>
               Continuous
             </button>
@@ -114,6 +150,23 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onConti
           />
         </div>
       </form>
+
+      {burn && (
+        <div className="burn-strip-row">
+          <button className="burn-strip" onClick={onUsage} title="open Usage">
+            <span>🔥 {burnFigure(burn.breakdown?.win1h, unit)}{unit === "cost" ? "" : " tok"}/1h</span>
+            <span>{burnFigure(burn.breakdown?.win5h, unit)} / 5h</span>
+            <span>{burnFigure(burn.breakdown?.win7d, unit)} / 7d</span>
+            {burn.limits?.windows?.["5h"]?.limitStatus && burn.limits.windows["5h"].limitStatus !== "allowed" && (
+              <span className="pill bad">{burn.limits.windows["5h"].limitStatus}</span>
+            )}
+          </button>
+          <span className="bar-item">
+            <RefreshSelect value={refreshSec} onChange={changeRefresh} />
+            <Help text="How often the burn-rate strip above refreshes itself. Shared with the same setting on the Usage page." />
+          </span>
+        </div>
+      )}
 
       {projects === null ? (
         <p className="muted pad">Loading…</p>
