@@ -13,6 +13,12 @@ as a standalone macOS desktop app via a thin Electron shell.
 - **macOS** for the Electron desktop shell and the "build / resume with Claude"
   terminal-launch buttons (they shell out through `osascript` to iTerm or Terminal).
   The web app itself is platform-agnostic.
+- **Windows**: the web app (server + PWA) runs unchanged — `npm install`,
+  `npm run dev`, `npm test` work as-is in PowerShell or cmd.exe. The Electron
+  desktop shell and the build/resume terminal-launch buttons are macOS-only
+  (no Windows equivalent is implemented). `npm run verify` shells out to bash
+  helper scripts and won't run natively — use WSL or Git Bash for it, or rely
+  on `npm test` instead.
 
 ## Install / run / test
 
