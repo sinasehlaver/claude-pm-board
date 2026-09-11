@@ -371,6 +371,64 @@ export function writeUsageLimitsWindow(key, patch) {
   return cfg;
 }
 
+// Anthropic's real 5h/7d windows tick on a fixed GRID, not a per-prompt
+// rolling anchor: whichever conversation starts an idle chain sets the grid's
+// phase, and every window after that lands on anchor + k*windowMs regardless
+// of whether you were active in it — a gap shorter than one full windowMs
+// (e.g. a 6h break inside a 5h grid) still lands the next message inside the
+// *next scheduled* block, it does NOT restart the clock at that message's own
+// timestamp. The chain only actually breaks — and the next message becomes a
+// brand-new anchor — once an entire windowMs block passes with zero activity
+// in it. Confirmed against the user's own claude.ai reading: a real
+// conversation 7 minutes past a scheduled block boundary still reset at that
+// scheduled boundary time (22:10), not 5h after the 7-minutes-late message
+// (22:17) — ruling out the simpler "reset on next prompt after any gap ≥
+// windowMs" model tried first. Reconstructed by replaying every local turn in
+// order, advancing the grid one block at a time when a turn lands in the
+// immediately-next scheduled block, and only re-anchoring when a turn skips
+// more than one block ahead (proof a whole block passed empty). Only as good
+// as local session-log history (no record of requests from other
+// machines/clients), which is why manual mode still reports this as a
+// projection, not a synced-cache-grade fact.
+function fixedGridBlock(sortedTurns, now, windowMs) {
+  let anchor = null;
+  let blockEnd = null; // end of the currently-confirmed-active grid block
+  for (const t of sortedTurns) {
+    if (t.ts > now) continue;
+    if (anchor === null) {
+      anchor = t.ts;
+      blockEnd = anchor + windowMs;
+      continue;
+    }
+    if (t.ts < blockEnd) continue; // still inside the current block — chain unchanged
+    const blocksAdvanced = Math.floor((t.ts - blockEnd) / windowMs) + 1;
+    if (blocksAdvanced > 1) {
+      // at least one full block passed with nothing in it — chain broken
+      anchor = t.ts;
+      blockEnd = anchor + windowMs;
+    } else {
+      // lands in the very next scheduled block — grid continues untouched
+      blockEnd += windowMs;
+    }
+  }
+  return anchor === null ? null : { anchor, blockEnd };
+}
+
+// Usage + reset for the *current* grid block (see fixedGridBlock above). If
+// the last-known block already elapsed with no activity confirming the next
+// one yet, there is no open window right now — usedTokens is 0 and resetAt is
+// null (the next window, and its reset time, becomes knowable only once a new
+// prompt lands and either extends the grid or re-anchors it).
+function fixedWindowUsage(turns, now, windowMs) {
+  const sorted = [...turns].sort((a, b) => a.ts - b.ts);
+  const block = fixedGridBlock(sorted, now, windowMs);
+  if (block === null || now >= block.blockEnd) return { usedTokens: 0, resetAt: null };
+  const blockStart = block.blockEnd - windowMs;
+  let usedTokens = 0;
+  for (const t of sorted) if (t.ts >= blockStart && t.ts <= now) usedTokens += tokenSum(t);
+  return { usedTokens, resetAt: new Date(block.blockEnd).toISOString() };
+}
+
 // Only meaningful once actually over the cap: projects the future moment your
 // own historical turns would age out of the rolling window enough to bring
 // the sum back at/under the cap, assuming zero further activity from now.
@@ -409,9 +467,14 @@ function liveCacheFor(cache, key) {
 //                 unavailable rather than silently substituting an estimate.
 //   "estimated" — local token burn against learnedCaps() (learned from a real
 //                 throttle, else a placeholder), with a *projected* reset.
-//   "manual"    — local token burn against a user-entered cap that never
-//                 changes on its own — set it once via writeUsageLimitsWindow
-//                 and it stays exactly as set until edited again.
+//   "manual"    — token burn against a user-entered cap that never changes on
+//                 its own (set it once via writeUsageLimitsWindow and it stays
+//                 exactly as set until edited again), computed over
+//                 Anthropic's actual fixed grid (fixedWindowUsage/
+//                 fixedGridBlock) rather than a rolling trailing-N sum: once a
+//                 conversation sets the grid's phase, resets land on that
+//                 fixed schedule (anchor + k*windowMs) whether or not you're
+//                 still active, and only a full idle block resets the phase.
 export async function accountRateLimitStatus(now = Date.now()) {
   const cache = rateLimitStatus();
   const cfg = readUsageLimitsConfig();
@@ -447,13 +510,16 @@ export async function accountRateLimitStatus(now = Date.now()) {
     } else if (mode === "manual") {
       const capTokens = cfg[w.key].manualCapTokens;
       if (capTokens) {
-        const r = projectedResetMs(turns, now, w.ms, used, capTokens);
+        // Manual is the one mode where "correct" means matching Anthropic's
+        // actual fixed-window mechanics, not a rolling sum — see
+        // fixedWindowUsage above.
+        const { usedTokens: fixedUsed, resetAt } = fixedWindowUsage(turns, now, w.ms);
         entry = {
           available: true,
-          utilization: Math.round((used / capTokens) * 100),
+          utilization: Math.round((fixedUsed / capTokens) * 100),
           capTokens,
-          usedTokens: used,
-          resetAt: r ? new Date(r).toISOString() : null,
+          usedTokens: fixedUsed,
+          resetAt,
           resetProjected: true,
           limitStatus: null,
         };
