@@ -1,10 +1,13 @@
 // Open a Mac terminal running `claude`, seeded with a task or resuming a session.
 // Prompt text is written to a temp file so it never lands on a shell command line.
 import { execFile } from "node:child_process";
-import { writeFileSync, existsSync, mkdtempSync } from "node:fs";
+import { writeFileSync, existsSync, mkdtempSync, mkdirSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { PM_ROOT } from "./paths.mjs";
+import { relayDir, specPathFor, writeJson, pruneRelay, BACKLOG_CLI } from "./relay.mjs";
 
 const DRYRUN = process.env.PM_LAUNCH_DRYRUN === "1";
 const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -42,8 +45,11 @@ export function seedForTask({ slug, title, note, adhoc }) {
 }
 
 // Seed prompt for a single ▶ Run on an Ideas-inbox item: research only, stop
-// short of building. You are the idea's future developer, not its builder yet
-// — actual project creation happens later via "Run @seq" (seedForIdeaPromotion).
+// short of building. You are the idea's future developer, not its builder yet.
+// A Build / Adopt+extend verdict auto-promotes the idea into a pm project (state +
+// backlog, no scaffold); Adopt / venturemind results stay in Todo with a note.
+// Building happens later, from the new project's own Run buttons. Batch promotion
+// with a build is still "Run @seq" (seedForIdeaPromotion).
 function seedForIdeaResearch({ title, note }) {
   const out = [
     `You're picking up an idea from the pm board's Ideas inbox. You are being`,
@@ -55,27 +61,59 @@ function seedForIdeaResearch({ title, note }) {
   if (note) out.push("", note);
   out.push(
     "",
-    "TRIAGE — pick exactly one:",
-    "- If this is a genuine business/venture concept (a monetizable market play,",
-    "  not just \"this could theoretically be a product\"), invoke the `venturemind`",
-    "  skill and run its normal workflow against this idea.",
-    "- Otherwise (a personal tool for the user, not a business), invoke the",
-    "  `atelier` skill and run it through Steps 0-5 only (frame, component",
-    "  build-vs-reuse inventory, architecture, aesthetic bar, phased plan) —",
-    "  do NOT run its Step 6 (Build). This is a one-shot session with no",
-    "  follow-up turn, so state assumptions and proceed rather than stalling on",
-    "  a question nobody can answer.",
+    "TRIAGE — ordered, take the first branch that fits:",
+    "1. Genuine business/venture concept (a monetizable market play, not just",
+    "   \"this could theoretically be a product\") -> invoke the `venturemind`",
+    "   skill and run its normal workflow against this idea. Stop there.",
+    "2. Otherwise it is a personal-use idea (a tool for the user, not a business).",
+    "   Invoke the `prospector` skill FIRST — does this already exist, and should",
+    "   the user adopt something or build it? Run its workflow through its verdict",
+    "   and its Step 5 save. Then branch on prospector's verdict:",
+    "   - Verdict \"Adopt\" (a suitable off-the-shelf tool exists): record the verdict",
+    "     and STOP. Do not invoke `atelier`, do not plan or build anything.",
+    "   - Verdict \"Build\" or \"Adopt + extend\" (nothing suitable exists, or a gap",
+    "     is left to fill): continue into the `atelier` skill and run it through",
+    "     Steps 0-5 only (frame, component build-vs-reuse inventory, architecture,",
+    "     aesthetic bar, phased plan) — do NOT run its Step 6 (Build). Feed",
+    "     prospector's findings in as atelier's Step 0/1 input instead of",
+    "     re-searching from scratch.",
+    "This is a one-shot session with no follow-up turn, so state assumptions and",
+    "proceed rather than stalling on a question nobody can answer (prospector and",
+    "atelier both end turns with a question — answer it yourself with your best",
+    "assumption and keep going).",
     "",
-    "When the skill finishes, this is a one-shot session — proactively write its",
-    "save artifact to disk yourself rather than waiting to be asked (venturemind's",
-    "`.vmind` export to `venturemind/vmind_saves/`, or atelier's report to",
+    "When each skill finishes, proactively write its save artifact to disk yourself",
+    "rather than waiting to be asked (venturemind's `.vmind` export to",
+    "`venturemind/vmind_saves/`, prospector's report to",
+    "`knowledge/prospector/<slug>.md`, atelier's report to",
     "`knowledge/atelier/<slug>.md`).",
     "",
-    "Finally, add ONE indented note line under this idea's bullet in",
-    "`.claude/backlog/ideas.md` (match it by its title text) pointing at the",
-    "artifact you just saved, e.g. \"researched — see knowledge/atelier/<slug>.md\".",
-    "Leave the idea itself in Todo — do not move, promote, or delete it. Promoting",
-    "it into a real pm project happens later, in a batch, via Run @seq.",
+    "Finally, file the result — it depends on the outcome:",
+    "- Adopt verdict, or a venturemind (business) idea: add ONE indented note line",
+    "  under this idea's bullet in `.claude/backlog/ideas.md` (match it by its title",
+    "  text), e.g. \"adopt <tool>, not built — see knowledge/prospector/<slug>.md\" (or",
+    "  the venturemind save path). Leave the idea in Todo — the user decides next.",
+    "- Build or Adopt + extend verdict (atelier ran Steps 0-5): PROMOTE the idea into",
+    "  a real pm project so it shows on the Home board. Do not build it (no Step 6,",
+    "  no PM_ROOT/<slug>/ scaffold) — only the pm bookkeeping:",
+    "  1. Pick the project slug = a short, memorable kebab-case product name (the",
+    "     name you'd suggest for the app, not a sentence from the idea). Check",
+    "     .claude/backlog/, .claude/state/ and .claude/rules/ for collisions; on",
+    "     collision append -2, -3, ...",
+    "  2. Write .claude/state/<slug>.md (<=40 lines, cap enforced; template",
+    "     .claude/state/_TEMPLATE.md): one-line summary, \"Full plan:",
+    "     knowledge/atelier/<file>.md\", Now = \"researched, ready to build\", Next = the",
+    "     phases as one-liners, Blockers = \"none\" (or whatever atelier flagged).",
+    "  3. Write .claude/backlog/<slug>.md with one Todo per phase from atelier's plan,",
+    "     each with an indented note pointing at the plan; the first Todo's note says",
+    "     to scaffold PM_ROOT/<slug>/ (README run/test section per the workspace",
+    "     rules). Backlog format: see any existing .claude/backlog/*.md.",
+    "  4. Remove the idea's bullet from .claude/backlog/ideas.md entirely (no",
+    "     duplicate left behind).",
+    "  5. End your final message with the chosen slug, why that name, and that the",
+    "     user can rename or move it from the board (the ▸ move-to-project button).",
+    "  Nobody can be asked mid-run, so this is the default — say plainly in the",
+    "  final message that it was auto-promoted and how to undo it.",
   );
   return out.join("\n");
 }
@@ -106,11 +144,60 @@ const PACING = [
   '     re-launch "Run @seq" later once the limit resets.',
 ].join("\n");
 
+// Pacing block for UNATTENDED runs (headless, supervised by server/relay.mjs).
+// Differs from PACING on the one point that matters: hitting the rate limit is NOT
+// a reason to stop — the relay sleeps until the reset time and resumes this session.
+const PACING_RELAY = [
+  "UNATTENDED RUN — you are headless under a relay script and the user is away. Nobody",
+  "can answer a question or approve a permission prompt: state assumptions and proceed.",
+  "Permission mode is acceptEdits and git is denied (do not commit). Edit/Write on",
+  "anything under `.claude/` (backlog, state) is BLOCKED in headless mode and will fail —",
+  "do not attempt it. Use this one allowed helper instead (run from any directory):",
+  `  node ${BACKLOG_CLI} move <slug> <Todo|Doing|Blocked|Done> "<exact title>" ["note"]`,
+  `  node ${BACKLOG_CLI} add <slug> "<title>"`,
+  `  node ${BACKLOG_CLI} state <slug> now "<headline>" ["detail" ...]`,
+  "If a todo needs a denied command or a decision only the user can make, `move` it to",
+  "Blocked with a one-line note saying why, and go on to the next.",
+  "",
+  "PROGRESS — the relay decides what is left by reading each project's",
+  ".claude/backlog/<slug>.md and matching todos BY TITLE. `move` a todo to Done (or",
+  "Blocked) as soon as it lands and never rename its title, or it will look unfinished",
+  "and be handed back to you.",
+  "",
+  "RATE LIMITS — if the account rate limit stops you, the relay waits for the reset time",
+  "and resumes this SAME session with a \"continue\" message, so subagents cut off mid-task",
+  "get picked up again. Therefore do NOT stop early, sleep, wait, or reschedule yourself",
+  "(no ScheduleWakeup), and do not end the session because usage looks high — just keep",
+  "working. Spread the load anyway: keep <=3 concurrent subagents, and if",
+  "http://localhost:4310/api/summary?bucket=hour (claude_usage_dashboard) answers and the",
+  "last few hourly buckets are rising fast, run smaller batches. Ignore it if it errors.",
+].join("\n");
+
+// Pre-launch utilization warning block. Inserted into PACING/PACING_RELAY if
+// utilization is already high before starting the batch.
+function preLaunchWarning({ window, utilization, resetAt }) {
+  const resetLabel = resetAt ? new Date(resetAt).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }) : "unknown";
+  return [
+    "",
+    "⚠ PRE-LAUNCH WARNING — the account is already at high utilization before this batch",
+    `starts. The ${window} window shows ${utilization}% usage, with reset around ${resetLabel}.`,
+    "You may want to pause here and wait for the window to reset, or proceed at reduced",
+    "concurrency (1–2 subagents max) to avoid hitting the hard limit. The relay will",
+    "auto-pause if utilization hits the soft limit during the run, so either way you",
+    "won't lose work — this is just a heads-up to size your batch accordingly.",
+  ].join("\n");
+}
+
 // Seed prompt for the "Run @seq" orchestrator launch: one claude session that
 // works a batch of backlog todos, fanning them out to subagents and pacing itself
 // against the current Claude usage / burn rate.
-export function seedForSequentialRun({ slug, tasks, adhoc }) {
-  if (slug === "ideas") return seedForIdeaPromotion({ tasks });
+// `mode` mirrors runnableTasks(): "seq" = the batch is the @seq-flagged todos,
+// "all" = run-all fallback (nothing flagged), so the prompt must not say "@seq-flagged".
+// `relay` = unattended headless run (PACING_RELAY instead of PACING).
+// `prelaunchUtilization` = {window, utilization, resetAt} if already high before launch.
+export function seedForSequentialRun({ slug, tasks, adhoc, mode = "seq", relay = false, prelaunchUtilization = null }) {
+  if (slug === "ideas") return seedForIdeaPromotion({ tasks, relay, prelaunchUtilization });
+  const seqMode = mode !== "all";
   const list = tasks
     .map((t, i) => {
       const head = `${i + 1}. ${t.title}`;
@@ -118,7 +205,7 @@ export function seedForSequentialRun({ slug, tasks, adhoc }) {
     })
     .join("\n");
   const out = [
-    `You're the orchestrator for a batch of ${tasks.length} @seq-flagged todo(s) from the pm board backlog for "${slug}".`,
+    `You're the orchestrator for a batch of ${tasks.length} ${seqMode ? "@seq-flagged " : ""}todo(s) from the pm board backlog for "${slug}".`,
     "",
     "TODOS:",
     list,
@@ -137,10 +224,11 @@ export function seedForSequentialRun({ slug, tasks, adhoc }) {
     "- Spawn a subagent per todo (the Task tool, per .claude/rules and CLAUDE.md).",
     "  Keep each subagent scoped to one todo.",
     "- After a todo lands and its project's verify/tests pass, move it to Done in",
-    `  .claude/backlog/${slug}.md and drop its @seq marker. Leave a todo in place`,
-    "  (un-flagged, with a note) if it turns out blocked.",
+    `  .claude/backlog/${slug}.md${seqMode ? " and drop its @seq marker" : ""}. Leave a todo in place`,
+    `  (${seqMode ? "un-flagged, " : ""}with a note) if it turns out blocked.`,
     "",
-    PACING,
+    relay ? PACING_RELAY : PACING,
+    ...(prelaunchUtilization ? [preLaunchWarning(prelaunchUtilization)] : []),
     "",
     adhoc
       ? `When all todos are done or blocked, update .claude/backlog/${slug}.md and summarise what shipped, what was deferred, and why.`
@@ -149,10 +237,58 @@ export function seedForSequentialRun({ slug, tasks, adhoc }) {
   return out.join("\n");
 }
 
+// Seed prompt for the Home "Latest todos" cross-project run: ONE orchestrator
+// (cwd = workspace root) over a hand-picked set of todos spanning several projects.
+// `ideas` never reaches here (filtered server-side; they have their own flow).
+// `prelaunchUtilization` = {window, utilization, resetAt} if already high before launch.
+export function seedForCrossProjectRun({ tasks, relay = false, prelaunchUtilization = null }) {
+  const groups = new Map();
+  for (const t of tasks) {
+    if (!groups.has(t.slug)) groups.set(t.slug, []);
+    groups.get(t.slug).push(t);
+  }
+  const list = [...groups]
+    .map(([slug, ts]) => {
+      const rows = ts.map((t, i) => {
+        const head = `  ${i + 1}. ${t.title}`;
+        return t.note ? `${head}\n     ${t.note.split("\n").join("\n     ")}` : head;
+      });
+      return `[${slug}]\n${rows.join("\n")}`;
+    })
+    .join("\n\n");
+  const out = [
+    `You're the orchestrator for a cross-project batch of ${tasks.length} todo(s) spanning ${groups.size} project(s), picked from the pm board's Home screen.`,
+    "You're running from the workspace root; project dirs are <root>/<slug>/.",
+    "",
+    "TODOS (grouped by project):",
+    list,
+    "",
+    "ORCHESTRATION:",
+    "- Before touching a project, read its .claude/rules/<slug>.md and .claude/state/<slug>.md",
+    "  (skip whichever doesn't exist - an ad-hoc project has no code dir yet).",
+    "- Todos in DIFFERENT projects are disjoint: run them in parallel via subagents.",
+    "  Todos in the SAME project run sequentially unless clearly disjoint (different",
+    "  files/behaviour). Re-evaluate after every batch.",
+    "- Spawn a subagent per todo (the Task tool, per .claude/rules and CLAUDE.md), scoped",
+    "  to one todo and one project, working in <root>/<slug>/.",
+    "- After a todo lands and its project's verify/tests pass, move it to Done in that",
+    "  project's .claude/backlog/<slug>.md (match the bullet by its title; the todo's",
+    "  position in the file may have shifted). Leave a todo in place, with a note, if it",
+    "  turns out blocked.",
+    "- When a project's todos are finished, update its .claude/state/<slug>.md.",
+    "",
+    relay ? PACING_RELAY : PACING,
+    ...(prelaunchUtilization ? [preLaunchWarning(prelaunchUtilization)] : []),
+    "",
+    "When all todos are done or blocked, summarise per project what shipped, what was deferred, and why.",
+  ];
+  return out.join("\n");
+}
+
 // Seed prompt for "Run @seq" on the Ideas inbox: promote every @seq-flagged
 // idea into a real pm project (research + scaffold), instead of orchestrating
 // todos within one existing project.
-function seedForIdeaPromotion({ tasks }) {
+function seedForIdeaPromotion({ tasks, relay = false, prelaunchUtilization = null }) {
   const list = tasks
     .map((t, i) => {
       const head = `${i + 1}. ${t.title}`;
@@ -174,15 +310,31 @@ function seedForIdeaPromotion({ tasks }) {
     "Each subagent must:",
     "1. Pick a kebab-case slug from the idea's title. Check .claude/backlog/ and",
     "   .claude/state/ for collisions; on collision append -2, -3, ...",
-    "2. TRIAGE — pick exactly one:",
-    "   - Genuine business/venture concept (a monetizable market play, not just",
-    "     \"this could theoretically be a product\") -> invoke the `venturemind` skill",
-    "     and run its normal workflow against the idea.",
-    "   - Otherwise (a personal tool, not a business) -> invoke the `atelier` skill",
-    "     and run its FULL workflow against the idea, including Step 6 (Build) below.",
+    "2. TRIAGE — ordered, take the first branch that fits:",
+    "   a. Genuine business/venture concept (a monetizable market play, not just",
+    "      \"this could theoretically be a product\") -> invoke the `venturemind` skill",
+    "      and run its normal workflow against the idea.",
+    "   b. Otherwise it is a personal-use idea (a tool for the user, not a business).",
+    "      Invoke the `prospector` skill FIRST - does this already exist, adopt or",
+    "      build? Run it through its verdict and its Step 5 save",
+    "      (knowledge/prospector/<slug>.md). Then branch on its verdict:",
+    "      - \"Adopt\" (a suitable off-the-shelf tool exists) -> STOP for this idea.",
+    "        Do NOT scaffold a project: no PM_ROOT/<slug>/, no CONTEXT.md, no",
+    "        state/backlog files, no atelier. Instead add an indented note line",
+    "        under the idea's bullet in .claude/backlog/ideas.md (match by title)",
+    "        with the verdict, the tool name, and prospector's report path, e.g.",
+    "        \"adopt <tool>, not built - see knowledge/prospector/<slug>.md\". Leave",
+    "        the bullet in ideas.md and un-flag it (drop its @seq marker) so it",
+    "        isn't re-run. Skip steps 3 and 4 below for this idea and report it in",
+    "        your final summary as 'adopt, not built'.",
+    "      - \"Build\" or \"Adopt + extend\" (nothing suitable exists, or a gap is left",
+    "        to fill) -> continue into the `atelier` skill and run its FULL workflow,",
+    "        including Step 6 (Build) below. Feed prospector's findings in as its",
+    "        Step 0/1 input rather than re-searching.",
     "   This is a one-shot session with no follow-up turn - state assumptions and",
-    "   proceed all the way through rather than stalling on an unanswerable question.",
-    "3. Create the project at PM_ROOT/<slug>/:",
+    "   proceed all the way through rather than stalling on an unanswerable question",
+    "   (prospector and atelier both end turns with a question - answer it yourself).",
+    "3. Create the project at PM_ROOT/<slug>/ (not for 'adopt' verdicts, see 2b):",
     "   - mkdir PM_ROOT/<slug>/ and write PM_ROOT/<slug>/CONTEXT.md with the full",
     "     research writeup: problem framing, findings (atelier's component",
     "     build-vs-reuse table, or venturemind's market/legal findings - whichever",
@@ -203,12 +355,15 @@ function seedForIdeaPromotion({ tasks }) {
     "     implementation phase from the plan, sized so a later Run / Run @seq on",
     "     this new project can pick them off one at a time.",
     "4. Remove the idea's bullet from .claude/backlog/ideas.md entirely - it's now",
-    "   promoted into its own project, don't leave a duplicate behind.",
+    "   promoted into its own project, don't leave a duplicate behind. (Not for",
+    "   'adopt' verdicts - those bullets stay, per 2b.)",
     "",
-    PACING,
+    relay ? PACING_RELAY : PACING,
+    ...(prelaunchUtilization ? [preLaunchWarning(prelaunchUtilization)] : []),
     "",
     "When every idea is promoted (or skipped/merged, with a note why), summarise the",
-    "new project slugs created and what, if anything, was skipped or merged.",
+    "new project slugs created, which ideas were 'adopt, not built' (with the tool",
+    "named), and what, if anything, was skipped or merged.",
   ];
   return out.join("\n");
 }
@@ -225,6 +380,37 @@ export function launchCommand({ cwd, inner: cmd }) {
   return new Promise((resolve, reject) =>
     execFile("osascript", ["-e", osa], (err) => (err ? reject(err) : resolve({ term }))),
   );
+}
+
+// Unattended variant of launchClaude for batch runs: writes a job spec (prompt + the
+// todos to track) under .claude/pm/relay/ and opens a terminal running relay-cli.mjs,
+// which runs claude headless and auto-resumes it after every rate-limit reset.
+// `caffeinate -is` keeps the Mac from idle-sleeping while the relay waits (macOS-only,
+// like everything in this file). In the packaged app the script lives in app.asar,
+// which plain `node` can't read — package.json `asarUnpack` ships a real copy.
+const RELAY_CLI = fileURLToPath(new URL("./relay-cli.mjs", import.meta.url)).replace(
+  /app\.asar([\\/])/,
+  "app.asar.unpacked$1",
+);
+
+export function launchRelay({ cwd, prompt, label, tasks }) {
+  const dir = cwd && existsSync(cwd) ? cwd : PM_ROOT;
+  pruneRelay(PM_ROOT);
+  mkdirSync(relayDir(PM_ROOT), { recursive: true });
+  const id = `${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`;
+  const specPath = specPathFor(PM_ROOT, id);
+  writeJson(specPath, {
+    id,
+    label,
+    root: PM_ROOT,
+    cwd: dir,
+    prompt,
+    tasks: tasks.map((t) => ({ slug: t.slug, title: t.title })),
+  });
+  return launchCommand({
+    cwd: PM_ROOT,
+    inner: `PM_ROOT=${shq(PM_ROOT)} caffeinate -is node ${shq(RELAY_CLI)} ${shq(specPath)}`,
+  }).then((r) => ({ ...r, relay: true, job: id }));
 }
 
 export function launchClaude({ cwd, prompt, resumeId }) {

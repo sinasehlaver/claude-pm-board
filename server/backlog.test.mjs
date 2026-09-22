@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseBacklog, serializeBacklog } from "./backlog.mjs";
+import { parseBacklog, serializeBacklog, runnableTasks } from "./backlog.mjs";
 
 const CANON = `# hub — backlog
 Updated: 2026-09-08
@@ -45,6 +45,31 @@ test("parse pulls the @seq flag, alone or with a priority", () => {
   assert.equal(alone.priority, null);
   const neither = b.tasks.find((t) => t.title === "Standalone budget rollover");
   assert.equal(neither.seq, false);
+});
+
+test("runnableTasks: flagged non-Done tasks win, else all Todo+Doing", () => {
+  const t = (title, state, seq = false) => ({ title, state, seq });
+  const tasks = [
+    t("doing", "Doing"),
+    t("todo", "Todo"),
+    t("flagged", "Todo", true),
+    t("blocked flagged", "Blocked", true),
+    t("done flagged", "Done", true),
+    t("blocked", "Blocked"),
+    t("done", "Done"),
+  ];
+  const sel = runnableTasks(tasks);
+  assert.equal(sel.mode, "seq");
+  assert.deepEqual(sel.tasks.map((x) => x.title), ["flagged", "blocked flagged"]);
+
+  // no live flags (a Done task's stale flag doesn't count) -> fallback to all
+  const all = runnableTasks(tasks.filter((x) => !x.seq || x.state === "Done"));
+  assert.equal(all.mode, "all");
+  assert.deepEqual(all.tasks.map((x) => x.title), ["doing", "todo"]);
+
+  // nothing runnable -> empty (server answers 400)
+  assert.deepEqual(runnableTasks([t("b", "Blocked"), t("d", "Done")]).tasks, []);
+  assert.deepEqual(runnableTasks([]).tasks, []);
 });
 
 test("ids are stable positional", () => {

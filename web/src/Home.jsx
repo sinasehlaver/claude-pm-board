@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { ago, get, send } from "./api";
 import Help from "./Help.jsx";
+import LatestTodos from "./LatestTodos.jsx";
+import { RelayStrip } from "./relay.jsx";
 import { costFor, tokensFor } from "./pricing.js";
 import { loadUnit, REFRESH_KEY, loadRefreshSec, RefreshSelect } from "./usageSettings.jsx";
 
@@ -168,6 +170,8 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onConti
         </div>
       )}
 
+      <RelayStrip />
+
       {projects === null ? (
         <p className="muted pad">Loading…</p>
       ) : (
@@ -196,6 +200,8 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onConti
           ))}
         </ul>
       )}
+
+      {projects !== null && <LatestTodos projects={projects} reload={reload} />}
     </div>
   );
 }

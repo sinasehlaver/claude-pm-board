@@ -79,6 +79,16 @@ export function serializeBacklog(b, { refreshDate = false } = {}) {
   return out.join("\n");
 }
 
+// Which tasks "Run" launches. Any non-Done @seq-flagged task => only those
+// (mode "seq", an explicit selection — Blocked included if the user flagged it).
+// Otherwise every Todo + Doing task (mode "all"; Blocked and Done are skipped).
+// The web client mirrors this in Project.jsx to label the button — keep in sync.
+export function runnableTasks(tasks) {
+  const seq = tasks.filter((t) => t.seq && t.state !== "Done");
+  if (seq.length) return { mode: "seq", tasks: seq };
+  return { mode: "all", tasks: tasks.filter((t) => t.state === "Todo" || t.state === "Doing") };
+}
+
 export function emptyBacklog(slug) {
   return { slug, updated: new Date().toISOString().slice(0, 10), tasks: [] };
 }

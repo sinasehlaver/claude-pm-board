@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { get, send } from "./api";
-import { costFor, tokensFor } from "./pricing.js";
+import { costFor, tokensFor, DEFAULT_GRID, getPricingConfig, savePricingConfig } from "./pricing.js";
 import Help from "./Help.jsx";
 import { UNIT_KEY, REFRESH_KEY, loadUnit, loadRefreshSec, RefreshSelect } from "./usageSettings.jsx";
 
@@ -129,12 +129,19 @@ function ManualCapInput({ value, unit, blendedRate, onSave }) {
 
 function RadialGauge({ label, windowKey, entry, resetLabel, fmtAmt, unit, blendedRate, onSaveManual }) {
   const { mode, available, utilization, usedTokens, capTokens, resetProjected, capLearned } = entry;
+  const hasCap = windowKey !== "30d"; // 5h/7d have hard Anthropic caps; 30d doesn't
   return (
     <div className="radial-card">
       <Radial pct={available ? utilization : 0} bad={available && (utilization ?? 0) >= 85} muted={!available} />
       <div className="radial-label">{label}</div>
       <div className="radial-nums">
-        {available ? `${fmtAmt(usedTokens)} of ${fmtAmt(capTokens)}` : mode === "manual" ? "set a cap below" : "no live data"}
+        {available ? (
+          hasCap ? `${fmtAmt(usedTokens)} of ${fmtAmt(capTokens)}` : fmtAmt(usedTokens)
+        ) : mode === "manual" ? (
+          "set a cap below"
+        ) : (
+          "no live data"
+        )}
       </div>
       {resetLabel && (
         <div className="radial-reset">
@@ -142,7 +149,7 @@ function RadialGauge({ label, windowKey, entry, resetLabel, fmtAmt, unit, blende
           {resetLabel}
         </div>
       )}
-      {mode === "estimated" && available && (
+      {hasCap && mode === "estimated" && available && (
         <div className="radial-cap-note">{capLearned ? "learned cap" : "placeholder cap"}</div>
       )}
       {mode === "manual" && (
@@ -376,6 +383,105 @@ export default function Usage({ onBack }) {
           </table>
         )}
       </section>
+
+      <PricingSection />
     </div>
+  );
+}
+
+function PricingSection() {
+  const [pricingConfig, setPricingConfig] = useState(getPricingConfig());
+  const [showReset, setShowReset] = useState(false);
+
+  const handlePriceChange = (model, field, value) => {
+    const numValue = parseFloat(value);
+    if (isNaN(numValue) || numValue < 0) return;
+    const updated = { ...pricingConfig };
+    if (!updated[model]) updated[model] = { ...DEFAULT_GRID[model] };
+    else updated[model] = { ...updated[model] };
+    updated[model][field] = numValue;
+    setPricingConfig(updated);
+    savePricingConfig(updated);
+  };
+
+  const resetToDefaults = () => {
+    setPricingConfig({});
+    savePricingConfig({});
+    setShowReset(false);
+  };
+
+  const isCustomized = Object.keys(pricingConfig).length > 0;
+
+  return (
+    <section className="block">
+      <div className="block-head">
+        <span className="block-head-title">
+          <h2>Pricing config</h2>
+          <Help text="Edit per-model rates ($/M tokens). Changes apply immediately to all cost calculations and persist locally. Reset clears all customizations." />
+        </span>
+        {isCustomized && (
+          <button
+            className="pill"
+            onClick={() => setShowReset(!showReset)}
+            style={{ background: showReset ? "#f44336" : "#666" }}
+          >
+            {showReset ? "Cancel" : "Reset to defaults"}
+          </button>
+        )}
+      </div>
+      {showReset ? (
+        <div style={{ padding: "1rem", textAlign: "center" }}>
+          <p>Clear all price customizations?</p>
+          <button onClick={resetToDefaults} style={{ marginRight: "0.5rem" }}>
+            Yes, reset
+          </button>
+          <button onClick={() => setShowReset(false)}>Cancel</button>
+        </div>
+      ) : (
+        <table className="ctable" style={{ fontSize: "0.9em" }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left" }}>Model</th>
+              <th style={{ textAlign: "right" }}>Input</th>
+              <th style={{ textAlign: "right" }}>Output</th>
+              <th style={{ textAlign: "right" }}>Cache 5m</th>
+              <th style={{ textAlign: "right" }}>Cache 1h</th>
+              <th style={{ textAlign: "right" }}>Cache read</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.entries(DEFAULT_GRID).map(([model, defaults]) => {
+              const current = pricingConfig[model] || defaults;
+              return (
+                <tr key={model}>
+                  <td className="clip">{model}</td>
+                  {["input", "output", "cache_write_5m", "cache_write_1h", "cache_read"].map((field) => (
+                    <td key={field} style={{ textAlign: "right" }}>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={current[field]}
+                        onChange={(e) => handlePriceChange(model, field, e.target.value)}
+                        style={{
+                          width: "70px",
+                          padding: "0.25rem",
+                          textAlign: "right",
+                          background:
+                            pricingConfig[model]?.[field] !== undefined &&
+                            pricingConfig[model][field] !== defaults[field]
+                              ? "#fff3cd"
+                              : "transparent",
+                        }}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }

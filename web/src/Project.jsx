@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ago, send } from "./api";
 import Help from "./Help.jsx";
+import { UnattendedToggle, loadUnattended } from "./relay.jsx";
 
 const STATES = ["Doing", "Todo", "Blocked", "Done"];
 const KIND = { commit: "●", handoff: "⇄", plan: "▤" };
@@ -9,6 +10,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
   const [editing, setEditing] = useState(false);
   const [showStatus, setShowStatus] = useState(false);
   const [doneOpen, setDoneOpen] = useState(false);
+  const [unattended, setUnattended] = useState(loadUnattended);
 
   if (!data)
     return (
@@ -41,10 +43,14 @@ export default function Project({ slug, data, projects, onBack, reload }) {
   const delTask = (id) => act(() => send("DELETE", `/projects/${slug}/tasks/${id}`));
   const buildTask = (id) =>
     act(() => send("POST", `/projects/${slug}/tasks/${id}/launch`));
+  // Mirrors runnableTasks() in server/backlog.mjs: any non-Done @seq flag => only
+  // those; else every Todo + Doing task (Blocked/Done skipped).
+  const seqTasks = tasks.filter((t) => t.seq && t.state !== "Done");
+  const runMode = seqTasks.length ? "seq" : "all";
+  const runCount = seqTasks.length || tasks.filter((t) => t.state === "Todo" || t.state === "Doing").length;
   const runSeq = () =>
     act(async () => {
-      const r = await send("POST", `/projects/${slug}/tasks/run-seq`);
-      alert(`Orchestrator launched in ${r.term} for ${r.count} @seq todo(s).`);
+      await send("POST", `/projects/${slug}/tasks/run-seq`, { unattended });
     });
   const moveTask = (id) => {
     const to = prompt(`Move to which project?\n${moveTargets.join(", ")}`);
@@ -91,14 +97,18 @@ export default function Project({ slug, data, projects, onBack, reload }) {
             <h2>Backlog</h2>
             <Help text="Your task list, grouped by state (Doing / Todo / Blocked / Done). Each task has a ▶ button to launch a Claude Code session on it, a @seq flag to include it in batch orchestration, and a priority pill." />
           </span>
-          {tasks.some((t) => t.seq && t.state !== "Done") && (
-            <span className="bar-item">
-              <button className="link" onClick={runSeq} title="orchestrate @seq todos">
-                ▶▶ Run @seq
-              </button>
-              <Help text="Launches one Claude Code session that works through every @seq-flagged task in this project's backlog, one after another." />
-            </span>
-          )}
+          <span className="bar-item">
+            <UnattendedToggle value={unattended} onChange={setUnattended} />
+            <button
+              className="link"
+              onClick={runSeq}
+              disabled={!runCount}
+              title={runMode === "seq" ? "orchestrate the @seq-flagged todos" : "orchestrate all Todo/Doing tasks"}
+            >
+              {`▶▶ Run ${runMode === "seq" ? "@seq" : "all"} (${runCount})`}
+            </button>
+            <Help text="Launches one Claude Code session that works through your tasks. If any tasks are @seq-flagged it runs only those; with none flagged it runs every Todo and Doing task (Blocked and Done are skipped). The label shows which mode you're in." />
+          </span>
         </div>
         <AddRow onAdd={addTask} />
         {STATES.map((st) => {

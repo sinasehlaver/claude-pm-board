@@ -4,8 +4,8 @@ A cross-project PM board: one pane over every project you keep in a workspace �
 status, backlog, and an activity timeline — rendered from plain Markdown/JSON files
 under a `.claude/` directory. **The files are the database.** No SQLite, no server DB.
 
-It ships as a mobile-first PWA (Express API + Vite/React front end) and, optionally,
-as a standalone macOS desktop app via a thin Electron shell.
+It ships as a mobile-first web app (Express API + Vite/React front end) and,
+optionally, as a standalone macOS desktop app via a thin Electron shell.
 
 ## Features
 
@@ -21,6 +21,20 @@ by most recent activity.
   project. The input at the top of the home screen ("💡 capture an idea…") drops a
   one-line task straight into the Ideas backlog without you having to pick a project
   first; sort it into a real project later (see "Ideas inbox" below).
+- **Latest todos** (below the cards) is a cross-project panel: an "add a todo…" box
+  with a project dropdown (remembers your last pick in `localStorage`; posts to the
+  normal `POST /api/projects/:slug/tasks`), then the most recently added open
+  (Todo/Doing) todos across all projects, newest first, each with a checkbox. **▶▶ Run
+  selected (N)** launches ONE orchestrator session at the workspace root over the
+  ticked todos (**▶▶ Run all listed (N)** when none are ticked; no confirm dialog — a short inline notice reports the launch);
+  todos in different projects run in parallel, same-project ones sequentially. Ideas
+  are neither listed nor run here (they have their own flow). Backed by
+  `GET /api/todos/latest?limit=N` and `POST /api/tasks/run-cross` (`{items:[{slug,id,title}]}`,
+  same loopback-or-`PM_TOKEN` guard as the other launch routes). Backlog files store
+  no created-at date, so "newest" is a proxy: most recently modified backlog file
+  first, and inside a file last-in-file first (new todos are appended). Ids are
+  positional, so the server re-reads the backlog on run and answers `409` if an
+  item's id/title no longer matches an open todo; the panel then refreshes.
 - **+ (add an ad-hoc project)** prompts for a short slug (lowercase letters, digits,
   hyphens) and creates an empty `.claude/backlog/<slug>.md` for something that doesn't
   have a code directory yet. Ad-hoc projects are tagged "ad-hoc" on their card.
@@ -117,18 +131,27 @@ for orchestration, `.claude/backlog/myproject.md` might contain:
 - Rename `utils/format.js` to `utils/formatting.js`  @seq
 ```
 
-**2. Launching it.** As soon as one or more non-Done todos in a project are
-`@seq`-flagged, a **▶▶ Run @seq** button appears next to the Backlog heading.
+**2. Launching it.** A run button is always shown next to the Backlog heading, and
+its label says which mode it's in. If one or more non-Done tasks are `@seq`-flagged
+it reads **▶▶ Run @seq (N)** and runs only those. If none are flagged it reads
+**▶▶ Run all (N)** and runs every **Todo + Doing** task (Blocked and Done are
+skipped; it launches immediately, with no confirmation dialog). It's disabled when nothing is runnable.
 Clicking it calls `POST /api/projects/:slug/tasks/run-seq`, which:
 
-- Collects every `@seq`-flagged todo in that project that isn't already Done.
+- Collects every non-Done `@seq`-flagged task in that project; if there are none,
+  falls back to every Todo/Doing task. Returns `{term,count}` (plus `mode`: `seq` or
+  `all`); `400` only when nothing is runnable. The seed prompt follows the mode: it says
+  "@seq-flagged" only in `seq` mode and just "batch of N todo(s)" in run-all mode.
 - Builds one seed prompt for all of them together via `seedForSequentialRun`
   (`server/launch.mjs`) — the todos are listed as one numbered batch, each with its
   note if it has one.
 - Opens a new terminal window (iTerm if installed, else Terminal.app) in the
   project's directory and starts a **fresh `claude` session** seeded with that
-  prompt. An alert confirms which terminal app it used and how many todos were
-  included (e.g. "Orchestrator launched in iterm for 3 @seq todo(s).").
+  prompt — by default via the unattended relay that auto-resumes after rate limits
+  (see item 5; send `{"unattended":false}` or untick the checkbox for a plain
+  interactive session, which is what items 3–4 below describe). The terminal window that opens is the confirmation; there is no
+  popup on the project page (Home's Run selected shows an inline notice with the
+  terminal app and todo count).
 
 **3. What the orchestrator session actually does**, per the instructions baked into
 the seed prompt:
@@ -162,13 +185,49 @@ back later: refresh the pm board (or just wait for the next auto-update — the 
 polls live file changes over SSE) and you'll see the flagged todos disappear from
 Todo and reappear under Done, one by one as the orchestrator finishes each.
 
-**5. It's one-shot, not a loop.** The orchestrator session is a normal, single
-`claude` invocation — not a `/loop` session. If it hits the rate-limit ceiling
-mid-batch, it stops cleanly: any todos it hasn't gotten to are left in place (still
-flagged, or noted as blocked-on-rate-limit with the reset time), and it exits rather
-than trying to sleep or reschedule itself. You re-launch **Run @seq** again later
-once the limit resets; already-Done todos won't re-run since they're no longer
-`@seq`-flagged.
+**5. Unattended by default — leave the house.** Every batch run (project
+**▶▶ Run @seq / Run all**, Home **▶▶ Run selected**) goes through the **relay**
+(`server/relay.mjs`) unless you untick the **Unattended** checkbox next to the run
+button. **macOS only** (it opens iTerm/Terminal via `osascript` and wraps itself in
+`caffeinate`; no Windows/Linux equivalent is implemented). The relay opens a terminal
+running `node server/relay-cli.mjs <job>`, which:
+
+- runs the orchestrator **headless** (`claude -p --output-format stream-json`,
+  `--permission-mode acceptEdits`, `Bash(git *)` denied) so nothing stalls on a
+  permission prompt — a todo that needs a denied command gets moved to **Blocked**
+  with a note instead;
+- reads claude's own `rate_limit_event`s: when the account window is rejected — or
+  five-hour utilization passes 95% / seven-day 97%, in which case it stops the run
+  itself rather than let it hit the wall mid-tool-call — it **sleeps until the
+  reported reset time (+90s)**, pops a macOS notification, then **resumes the same
+  session** (`--resume`) with a "you were cut off, continue the still-open todos"
+  message, so the subagents that were interrupted pick up where they stopped. This
+  repeats for as many resets as it takes;
+- decides what is left by re-reading each project's backlog file and matching the
+  batch's todos **by title** (Todo/Doing = open; Done/Blocked = resolved), so it
+  finishes when the agent has moved everything out of Todo. If the agent exits
+  cleanly with todos still open it nudges it up to 3 times while progress is being
+  made, then reports **stalled**;
+- keeps a status file in `.claude/pm/relay/<id>.job.json` that the Home board shows as
+  a strip (running / waiting until `<time>` / done / stalled / failed). A finished row
+  (anything but running/waiting) has a **✕** to dismiss it — deletes the job/spec files,
+  `DELETE /api/relay/:id`, same loopback/`PM_TOKEN` guard as launching;
+- updates the backlog/state through **one allowlisted helper**, `server/backlog-cli.mjs`
+  (`move` / `add` / `state … now`). Claude Code hard-blocks Edit/Write on anything under
+  `.claude/` in headless mode — no allow rule, `--add-dir` or hook overrides it — so
+  without the helper a finished todo could never leave Todo and every run would end
+  "stalled". The helper goes through pm's own round-trip-safe parsers, so it can't
+  corrupt the files; `Bash(git *)` stays denied and nothing else is allowlisted. A
+  consequence: an unattended run cannot hand-edit `.claude/rules/*.md` or create new
+  project state files (Ideas promotion) — use the interactive path for those.
+
+Leave the Mac plugged in and the lid open — `caffeinate` prevents idle sleep, not
+lid-close sleep. Ctrl-C in the relay's terminal stops it for good. Untick
+**Unattended** for the old behaviour: a normal interactive `claude` session that stops
+cleanly at the limit (leaving todos flagged or noted as blocked-on-rate-limit) and that
+you re-launch after the reset. Tunables (env on the pm server): `PM_RELAY_STOP_5H`
+(0.95), `PM_RELAY_STOP_7D` (0.97), `PM_RELAY_BUFFER_MS` (90000), `PM_RELAY_TICK_MS`
+(30000), `PM_RELAY_MAX_LIMIT_HITS` (30), `PM_RELAY_NOTIFY=0` to silence notifications.
 
 **6. Remote launch needs auth.** Like the single-task build button, `Run @seq` is
 guarded: it only works from a loopback client (i.e. the same machine) or a request
@@ -199,18 +258,32 @@ backlog entry to the target project's `Todo` section (`POST /api/tasks/move`).
 The Ideas project's **▶** and **▶▶ Run @seq** buttons behave differently from every
 other project's, because `server/launch.mjs` branches on `slug === "ideas"`:
 
-- **▶ on a single idea** launches a *research-only* session: it triages the idea
-  (genuine business/venture concept → the `venturemind` skill; otherwise a personal
-  tool → the `atelier` skill, research steps only, no build) and leaves a note on the
-  idea's bullet pointing at the resulting write-up. The idea itself stays in Todo —
-  nothing gets built or promoted yet.
+- **Triage (both buttons), in order:** a genuine business/venture concept → the
+  `venturemind` skill. Otherwise it's a personal-use idea, and the `prospector` skill
+  runs **first** to answer "does this already exist — adopt or build?". If prospector's
+  verdict is **Adopt** (a suitable off-the-shelf tool exists), the idea stops there:
+  the verdict and prospector's report path (`knowledge/prospector/<slug>.md`) are noted
+  on the idea's bullet and nothing is built. If the verdict is **Build** or **Adopt +
+  extend**, it continues into the `atelier` skill.
+- **▶ on a single idea** launches a *research-only* session that follows the triage
+  above (`atelier` runs its research steps only, no build). On a **Build** / **Adopt +
+  extend** verdict the idea is then **auto-promoted** to a project on the Home board
+  under a suggested product name: a `.claude/state/<slug>.md` ("researched, ready to
+  build"), a `.claude/backlog/<slug>.md` with one Todo per plan phase (the first one
+  scaffolds the code dir), and its bullet is removed from the inbox. Nothing is built.
+  Rename or relocate it from the board afterwards (▸ move to project). An **Adopt**
+  verdict or a business (`venturemind`) idea stays in Todo with a note line pointing
+  at the write-up, since those need your call.
 - **▶▶ Run @seq on a batch of `@seq`-flagged ideas** promotes each one into a real pm
   project: a subagent per idea creates `PM_ROOT/<slug>/` with a `CONTEXT.md` (full
-  research + implementation plan, and — for personal-tool ideas — `atelier`'s actual
-  build, not just a plan), a `.claude/state/<slug>.md`, and a `.claude/backlog/<slug>.md`
-  seeded with one Todo per implementation phase, then removes the idea's bullet from
-  `ideas.md`. From there the new project behaves like any other — its own ▶ / Run @seq
-  buttons pick up where promotion left off.
+  research + implementation plan, and — for personal-tool ideas prospector says to
+  build — `atelier`'s actual build, not just a plan), a `.claude/state/<slug>.md`, and
+  a `.claude/backlog/<slug>.md` seeded with one Todo per implementation phase, then
+  removes the idea's bullet from `ideas.md`. From there the new project behaves like
+  any other — its own ▶ / Run @seq buttons pick up where promotion left off. Ideas
+  prospector says to **adopt** are *not* scaffolded: the bullet stays in `ideas.md`,
+  un-flagged, with the verdict + report path noted, and the final summary lists it as
+  "adopt, not built".
 
 ### Sessions inbox
 
@@ -290,11 +363,11 @@ Cost is an estimate from a hardcoded per-model pricing table in `web/src/pricing
 (ported from `claude_usage_dashboard`'s pricing grid) — cross-check against
 anthropic.com for current rates, not a billing statement.
 
-### Progressive web app / desktop shell
+### Web app / desktop shell
 
-The front end is a mobile-first PWA — installable to your phone's home screen like a
-native app, with its own URL routing (`/`, `/project/<slug>`, `/sessions`,
-`/continuous`) so back/forward work as expected. On macOS, `npm run app` builds it
+The front end is a mobile-first single-page app, with its own URL routing (`/`,
+`/project/<slug>`, `/sessions`, `/continuous`) so back/forward work as expected. On
+macOS, `npm run app` builds it
 and wraps it in a minimal Electron shell (`electron/main.cjs`) for a standalone
 desktop app instead of a browser tab; `npm run app:dmg` packages a distributable
 `.dmg`. Both render the exact same web app against the same live workspace files.
@@ -305,7 +378,7 @@ desktop app instead of a browser tab; `npm run app:dmg` packages a distributable
 - **macOS** for the Electron desktop shell and the "build / resume with Claude"
   terminal-launch buttons (they shell out through `osascript` to iTerm or Terminal).
   The web app itself is platform-agnostic.
-- **Windows**: the web app (server + PWA) runs unchanged — `npm install`,
+- **Windows**: the web app (server + front end) runs unchanged — `npm install`,
   `npm run dev`, `npm test` work as-is in PowerShell or cmd.exe. The Electron
   desktop shell and the build/resume terminal-launch buttons are macOS-only
   (no Windows equivalent is implemented). `npm run verify` shells out to bash
@@ -317,6 +390,7 @@ desktop app instead of a browser tab; `npm run app:dmg` packages a distributable
 ```
 npm install         # once
 npm run dev         # server :4500 + vite :4501 (proxies /api)
+scripts/start.sh    # same as npm run dev, but Ctrl+C reliably kills both processes
 npm test            # node:test, server/*.test.mjs
 npm run app         # build web/ + run the desktop shell (electron/main.cjs)
 npm run app:dmg     # package release/PM-<ver>.dmg  (app:pack = unpacked .app only)
@@ -336,6 +410,7 @@ All optional, via environment variables:
 | `PM_ROOT` | parent directory of this package | Workspace root that owns the `.claude/` dir to read & write. `pm/` is expected to live directly under the workspace it manages; set this to override (tests and `npm run verify` always do). |
 | `PM_PORT` / `PORT` | `4500` | Server port. |
 | `PM_TOKEN` | _(unset)_ | Optional shared secret. When set, launch/resume routes require `?token=` or an `x-pm-token` header. Needed to use the build button from a phone. |
+| `PM_RELAY_*` | see "Unattended by default" | Thresholds/timings for the unattended run relay (macOS only). |
 | `CONTINUOUS_ROOT` | `$PM_ROOT/continuous` | Location of the optional autonomous-runner project the Continuous tab drives. pm boots fine without it. |
 
 ## Workspace layout it expects
@@ -348,10 +423,34 @@ Under `$PM_ROOT/.claude/`:
   (`Doing` / `Todo` / `Blocked` / `Done`); one `- ` bullet per task, optional trailing
   `p1|p2|p3` priority, optional trailing `(YYYY-MM-DD)` on done items, an indented line
   is the previous task's note. `backlog/ideas.md` is a pinned inbox.
+- `rules/<slug>.md` — per-project constraints/gotchas. The board doesn't render these;
+  they are read by the Claude Code sessions the board launches ("read the project's
+  rules before editing it"), so they are part of how pm works in practice.
+- `handoffs/*.md` — session handoff notes; the activity timeline lists them by filename/mtime.
 - `pm/activity.json`, `pm/sessions.json` — generated by a harvester pass; never hand-edited.
 - `pm/session-index.json` — user-owned map of Claude Code session id → project.
+- `pm/relay/<id>.spec.json` / `<id>.job.json` — one unattended run's brief and live
+  status, written by the relay; pruned after 14 days.
 
 Session transcripts are read from `~/.claude/projects/<escaped-PM_ROOT>/*.jsonl`.
+
+### How the files relate
+
+`state/<slug>.md` is the one-glance status (what's happening now, what's next), the
+`backlog/<slug>.md` is the full task list, and `rules/<slug>.md` is what a session must
+know before touching the project. The board edits the first two; launched sessions read
+all three and write back to state + backlog when they finish, which is what makes the
+board a live view instead of a copy. `state` `## Next` and backlog `## Todo` overlap on
+purpose — state stays the short authoritative line, and no divergence check is done.
+
+## Contributing / keeping the docs in sync
+
+[`CLAUDE.md`](CLAUDE.md) at the repo root is the guide for Claude Code sessions working
+*on* pm (commands, invariants, conventions); keep it free of machine-specific paths. When
+you change behavior — a route, a backlog/state format rule, a launch/relay flag, a UI
+control — update in the same change: this README's matching section, `CLAUDE.md` if an
+invariant moved, and the tests. Format changes must keep the byte-identical round-trip
+tests passing.
 
 This project grew inside one specific workspace and is tuned to its conventions;
 treat it as a personal tool / reference implementation rather than a turnkey product.

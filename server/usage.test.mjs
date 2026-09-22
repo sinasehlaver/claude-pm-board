@@ -45,6 +45,22 @@ writeFileSync(
   ].join(""),
 );
 
+// Streaming assistant turns write the same message.id multiple times as the
+// response fills in, each with a growing usage.output_tokens snapshot — only
+// the LAST line for an id is the final, complete usage. Own fixture root so
+// it never perturbs the rolling-window sums above.
+const streamRoot = mkdtempSync(join(tmpdir(), "pm-usage-stream-"));
+const streamDir = join(streamRoot, "-Users-sina-Projects-stream");
+mkdirSync(streamDir, { recursive: true });
+writeFileSync(
+  join(streamDir, "stream-session.jsonl"),
+  [
+    turn({ id: "st1", tsMsAgo: 30 * 60_000, usage: { input_tokens: 2, output_tokens: 7 } }),
+    turn({ id: "st1", tsMsAgo: 30 * 60_000, usage: { input_tokens: 2, output_tokens: 7 } }),
+    turn({ id: "st1", tsMsAgo: 30 * 60_000, usage: { input_tokens: 2, output_tokens: 447 } }),
+  ].join(""),
+);
+
 // A real quotaLimits throttle from 20 days ago, in its own fixture root (kept
 // separate from `root` above so it never perturbs the other tests' turn counts
 // or rolling-window sums) — only exercised by the cap-learning tests below,
@@ -101,6 +117,19 @@ test("allTurns dedupes a subagent turn that repeats a main-session message.id", 
   assert.equal(ids.filter((id) => id === "m1").length, 1);
   assert.ok(ids.includes("s1"));
   assert.equal(turns.length, 5); // m1, m2, m3, old, s1 (dup m1 dropped)
+});
+
+test("parseFile keeps the LAST usage snapshot for a repeated streaming message.id, not the first", async () => {
+  const prevRoot = process.env.CLAUDE_PROJECTS_ROOT;
+  process.env.CLAUDE_PROJECTS_ROOT = streamRoot;
+  try {
+    const turns = await allTurns();
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].id, "st1");
+    assert.equal(turns[0].output, 447); // final streamed value, not the first partial 7
+  } finally {
+    process.env.CLAUDE_PROJECTS_ROOT = prevRoot;
+  }
 });
 
 test("burnSnapshot sums rolling windows correctly", async () => {
@@ -353,102 +382,60 @@ test("accountRateLimitStatus projects a reset time once estimated usage exceeds 
   }
 });
 
-test("accountRateLimitStatus (mode=manual) reports a fixed-window reset even when under cap, not just once over it", async () => {
-  const winRoot = mkdtempSync(join(tmpdir(), "pm-usage-fixedwin-"));
-  const dir = join(winRoot, "-Users-sina-Projects-fixedwin");
+test("accountRateLimitStatus (mode=manual) uses a plain rolling sum, same as estimated — not a reconstructed reset grid", async () => {
+  // An earlier version computed manual mode against a reconstructed
+  // Anthropic reset grid; that measurably undercounted against real
+  // references (claude.ai's own Usage page, claude_usage_dashboard) because
+  // the reconstructed "current block" doesn't reliably track when
+  // Anthropic's real window actually opened. A turn just outside the window
+  // must not count, and one just inside must, exactly like sumSince.
+  const winRoot = mkdtempSync(join(tmpdir(), "pm-usage-manualroll-"));
+  const dir = join(winRoot, "-Users-sina-Projects-manualroll");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    join(dir, "fixedwin-session.jsonl"),
+    join(dir, "manualroll-session.jsonl"),
     [
-      // an old, isolated prompt more than 5h before the anchor below — must
-      // never count toward the current window's usage or reset.
-      turn({ id: "stale", tsMsAgo: 20 * 3600_000, usage: { input_tokens: 999, output_tokens: 999 } }),
-      // anchors the current 5h window at 4h50m ago
-      turn({ id: "anchor", tsMsAgo: 4 * 3600_000 + 50 * 60_000, usage: { input_tokens: 100, output_tokens: 0 } }),
-      turn({ id: "recent", tsMsAgo: 4 * 60_000, usage: { input_tokens: 100, output_tokens: 0 } }),
+      turn({ id: "outside5h", tsMsAgo: 5 * 3600_000 + 60_000, usage: { input_tokens: 999, output_tokens: 999 } }),
+      turn({ id: "inside5h", tsMsAgo: 4 * 3600_000, usage: { input_tokens: 100, output_tokens: 0 } }),
     ].join(""),
   );
   const prevRoot = process.env.CLAUDE_PROJECTS_ROOT;
   freshLimitsPath(winRoot);
   process.env.CLAUDE_PROJECTS_ROOT = winRoot;
-  writeUsageLimitsWindow("5h", { mode: "manual", manualCapTokens: 1_000_000 }); // nowhere near the cap
+  writeUsageLimitsWindow("5h", { mode: "manual", manualCapTokens: 1_000_000 });
   try {
     const s = await accountRateLimitStatus(now);
-    const w5h = s.windows["5h"];
-    assert.equal(w5h.usedTokens, 200); // "stale" excluded, only anchor+recent
-    assert.ok(w5h.resetAt); // reset is reported even though far under cap
-    const resetMs = Date.parse(w5h.resetAt) - now;
-    // anchor.ts + 5h is ~10 minutes from now
-    assert.ok(resetMs > 0 && resetMs < 15 * 60_000);
+    assert.equal(s.windows["5h"].usedTokens, 100); // only "inside5h"
+    assert.equal(s.windows["5h"].resetAt, null); // under cap -> nothing to project
   } finally {
     process.env.CLAUDE_PROJECTS_ROOT = prevRoot;
     rmSync(winRoot, { recursive: true, force: true });
   }
 });
 
-test("accountRateLimitStatus (mode=manual) a gap shorter than one full block does NOT restart the clock — it lands in the next scheduled grid block", async () => {
-  // Reproduces the real scenario the user reported: a conversation 6h after
-  // the first one (a gap > windowMs but < 2*windowMs) still reset on the
-  // ORIGINAL grid's schedule (anchor + 2*5h), not 5h after itself.
-  const gapRoot = mkdtempSync(join(tmpdir(), "pm-usage-gapwin-"));
-  const dir = join(gapRoot, "-Users-sina-Projects-gapwin");
+test("accountRateLimitStatus (mode=manual) 30d and 7d sum independently — an old turn outside 7d still counts toward 30d", async () => {
+  const winRoot = mkdtempSync(join(tmpdir(), "pm-usage-30d-"));
+  const dir = join(winRoot, "-Users-sina-Projects-30d");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
-    join(dir, "gapwin-session.jsonl"),
+    join(dir, "thirtyd-session.jsonl"),
     [
-      // sets the grid's phase 6h ago; its first 5h block closed 1h ago
-      turn({ id: "first", tsMsAgo: 6 * 3600_000, usage: { input_tokens: 5000, output_tokens: 5000 } }),
-      // lands inside the *next scheduled* block (1h past that block's start,
-      // not a whole empty block later) -> grid continues from "first"
-      turn({ id: "second", tsMsAgo: 0, usage: { input_tokens: 100, output_tokens: 0 } }),
+      turn({ id: "old20d", tsMsAgo: 20 * 24 * 3600_000, usage: { input_tokens: 50000, output_tokens: 0 } }),
+      turn({ id: "recent3d", tsMsAgo: 3 * 24 * 3600_000, usage: { input_tokens: 100, output_tokens: 0 } }),
     ].join(""),
   );
   const prevRoot = process.env.CLAUDE_PROJECTS_ROOT;
-  freshLimitsPath(gapRoot);
-  process.env.CLAUDE_PROJECTS_ROOT = gapRoot;
-  writeUsageLimitsWindow("5h", { mode: "manual", manualCapTokens: 1_000_000 });
+  freshLimitsPath(winRoot);
+  process.env.CLAUDE_PROJECTS_ROOT = winRoot;
+  writeUsageLimitsWindow("30d", { mode: "manual", manualCapTokens: 1_000_000 });
+  writeUsageLimitsWindow("7d", { mode: "manual", manualCapTokens: 1_000_000 });
   try {
     const s = await accountRateLimitStatus(now);
-    const w5h = s.windows["5h"];
-    assert.equal(w5h.usedTokens, 100); // "first" already aged out of the current block, only "second" counts
-    assert.ok(w5h.resetAt);
-    const resetMs = Date.parse(w5h.resetAt) - now;
-    // reset is "first".ts + 2*5h = 4h from now, NOT 5h from "second"
-    assert.ok(resetMs > 3.9 * 3600_000 && resetMs < 4.1 * 3600_000);
+    assert.equal(s.windows["30d"].usedTokens, 50100); // both turns, 20d one included
+    assert.equal(s.windows["7d"].usedTokens, 100); // only the 3d-old turn
   } finally {
     process.env.CLAUDE_PROJECTS_ROOT = prevRoot;
-    rmSync(gapRoot, { recursive: true, force: true });
-  }
-});
-
-test("accountRateLimitStatus (mode=manual) a fully empty block breaks the grid and the next prompt starts a fresh one", async () => {
-  const emptyRoot = mkdtempSync(join(tmpdir(), "pm-usage-emptyblock-"));
-  const dir = join(emptyRoot, "-Users-sina-Projects-emptyblock");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, "emptyblock-session.jsonl"),
-    [
-      // opens a block 11h ago that closes 6h ago, with NOTHING in the
-      // following 5h block (6h ago -> 1h ago) -> the chain is broken
-      turn({ id: "old", tsMsAgo: 11 * 3600_000, usage: { input_tokens: 5000, output_tokens: 5000 } }),
-      // this is a brand-new anchor, not a grid continuation
-      turn({ id: "fresh", tsMsAgo: 0, usage: { input_tokens: 100, output_tokens: 0 } }),
-    ].join(""),
-  );
-  const prevRoot = process.env.CLAUDE_PROJECTS_ROOT;
-  freshLimitsPath(emptyRoot);
-  process.env.CLAUDE_PROJECTS_ROOT = emptyRoot;
-  writeUsageLimitsWindow("5h", { mode: "manual", manualCapTokens: 1_000_000 });
-  try {
-    const s = await accountRateLimitStatus(now);
-    const w5h = s.windows["5h"];
-    assert.equal(w5h.usedTokens, 100); // only "fresh" — "old" is a dead, unrelated chain
-    assert.ok(w5h.resetAt);
-    const resetMs = Date.parse(w5h.resetAt) - now;
-    assert.ok(resetMs > 4.9 * 3600_000 && resetMs <= 5 * 3600_000); // a full fresh 5h from "fresh"
-  } finally {
-    process.env.CLAUDE_PROJECTS_ROOT = prevRoot;
-    rmSync(emptyRoot, { recursive: true, force: true });
+    rmSync(winRoot, { recursive: true, force: true });
   }
 });
 

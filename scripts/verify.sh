@@ -101,6 +101,13 @@ done
 B="http://127.0.0.1:$port"
 jn() { node -e "$1"; }
 
+# a live-looking unattended relay job (pid = this script, alive for the whole run)
+mkdir -p "$fix/.claude/pm/relay"
+now_ms=$(( $(date +%s) * 1000 ))
+cat > "$fix/.claude/pm/relay/verify.job.json" <<EOF
+{"id":"verify","label":"hub (2)","status":"waiting","pid":$$,"startedAt":$now_ms,"updatedAt":$now_ms,"attempt":1,"open":2,"resumeAt":$(( now_ms + 7200000 )),"waitReason":"five_hour limit","events":[]}
+EOF
+
 echo "--- /api/projects"
 curl -sf "$B/api/projects" | jn 'const d=JSON.parse(require("fs").readFileSync(0));console.log(d.map(p=>`${p.slug} open=${p.openCount} pinned=${p.pinned} adhoc=${p.adhoc}`).join("\n"));if(!d.find(p=>p.slug==="ideas"&&p.pinned))process.exit(1)'
 
@@ -115,8 +122,24 @@ curl -sf "$B/api/projects/hub" | jn 'const d=JSON.parse(require("fs").readFileSy
 echo "--- build-with-claude (dryrun)"
 curl -sf -X POST "$B/api/projects/hub/tasks/0/launch" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||!/claude "\$\(cat /.test(d.cmd))process.exit(1);console.log("launch cmd:",d.cmd.slice(0,60),"…")'
 
-echo "--- run @seq orchestrator (dryrun)"
-curl -sf -X POST "$B/api/projects/hub/tasks/run-seq" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||d.count!==2||!/claude "\$\(cat /.test(d.cmd))process.exit(1);console.log("run-seq count =",d.count,"| cmd:",d.cmd.slice(0,50),"…")'
+echo "--- run @seq orchestrator (dryrun; default = unattended relay, {unattended:false} = interactive)"
+curl -sf -X POST "$B/api/projects/hub/tasks/run-seq" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||d.count!==2||!d.relay||!/caffeinate -is node .*relay-cli\.mjs/.test(d.cmd))process.exit(1);console.log("run-seq relay count =",d.count,"| job:",d.job)'
+curl -sf -X POST "$B/api/projects/hub/tasks/run-seq" -H content-type:application/json -d '{"unattended":false}' | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||d.count!==2||d.relay||!/claude "\$\(cat /.test(d.cmd))process.exit(1);console.log("run-seq interactive count =",d.count,"| cmd:",d.cmd.slice(0,50),"…")'
+curl -sf "$B/api/relay" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(d.length!==1||d[0].status!=="waiting")process.exit(1);console.log("relay jobs listed =",d.length,"| status =",d[0].status)'
+
+echo "--- run-all fallback (no @seq flags -> every Todo/Doing; nothing runnable -> 400)"
+curl -sf -X POST "$B/api/projects/discord-clone/tasks/run-seq" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||d.mode!=="all"||d.count!==1)process.exit(1);console.log("run-all count =",d.count,"| mode =",d.mode)'
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$B/api/projects/nosuch/tasks/run-seq")
+[ "$code" = "400" ] || { echo "expected 400 for empty project, got $code"; exit 1; }
+echo "empty project -> 400"
+
+echo "--- latest todos + cross-project run (dryrun; ideas excluded; stale -> 409)"
+curl -sf "$B/api/todos/latest?limit=10" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(d.length!==4||d.some(t=>t.slug==="ideas"))process.exit(1);if(!["slug","id","title","note","seq","priority"].every(k=>k in d[0]))process.exit(1);console.log("latest:",d.map(t=>t.slug+":"+t.title).join(" | "))'
+items=$(curl -sf "$B/api/todos/latest" | jn 'const d=JSON.parse(require("fs").readFileSync(0));console.log(JSON.stringify({items:d.slice(0,3).map(({slug,id,title})=>({slug,id,title})).concat([{slug:"ideas",id:0}])}))')
+curl -sf -X POST "$B/api/tasks/run-cross" -H content-type:application/json -d "$items" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||d.count!==3||d.skipped!==1||!d.relay||!/relay-cli\.mjs/.test(d.cmd))process.exit(1);console.log("run-cross count =",d.count,"projects =",d.projects,"skipped =",d.skipped)'
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$B/api/tasks/run-cross" -H content-type:application/json -d '{"items":[{"slug":"hub","id":0,"title":"not the title"}]}')
+[ "$code" = "409" ] || { echo "expected 409 for stale item, got $code"; exit 1; }
+echo "stale item -> 409"
 
 echo "--- /api/continuous"
 curl -sf "$B/api/continuous" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.config||d.config.cap_5h!==25000000)process.exit(1);if(!("runner"in d))process.exit(1);console.log("continuous: runner.alive =",d.runner.alive,"| config loaded")'

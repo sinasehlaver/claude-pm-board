@@ -1,20 +1,23 @@
 import express from "express";
 import { execFile } from "node:child_process";
-import { existsSync, watch } from "node:fs";
+import { existsSync, watch, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PM_ROOT, CLAUDE, STATE_DIR, BACKLOG_DIR, CONTINUOUS_DIR } from "./paths.mjs";
 import { listProjects, getProject } from "./projects.mjs";
 import { readState, writeState } from "./state.mjs";
-import { readBacklog, writeBacklog, emptyBacklog } from "./backlog.mjs";
+import { readBacklog, writeBacklog, emptyBacklog, runnableTasks } from "./backlog.mjs";
 import { listSessions, fileSession, sessionToTask, moveTask } from "./sessions.mjs";
-import { seedForTask, seedForSequentialRun, launchClaude } from "./launch.mjs";
+import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, launchClaude, launchRelay } from "./launch.mjs";
+import { listRelayJobs, relayDir, dismissRelay } from "./relay.mjs";
+import { latestTodos, resolveCrossItems } from "./todos.mjs";
 import * as continuous from "./continuous.mjs";
 import {
   burnSnapshot,
   burnBreakdown,
   summary,
   accountRateLimitStatus,
+  checkPreLaunchUtilization,
   paceBreakdown,
   PACE_WINDOW_MS,
   writeUsageLimitsWindow,
@@ -28,6 +31,9 @@ const SESSION_ID_RE = /^[a-f0-9][a-f0-9-]{7,}$/i;
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 const hasToken = (req) => TOKEN && (req.query.token === TOKEN || req.get("x-pm-token") === TOKEN);
 const canLaunch = (req) => LOOPBACK.has(req.ip) || hasToken(req);
+// Batch runs (run-seq / run-cross) default to the unattended relay; `{unattended:false}`
+// opts back into a plain interactive session.
+const unattended = (req) => (req.body || {}).unattended !== false;
 
 const app = express();
 app.use(express.json());
@@ -212,7 +218,8 @@ app.post("/api/projects/:slug/tasks/:id/launch", async (req, res, next) => {
   }
 });
 
-// Launch one orchestrator session over every @seq-flagged todo for a project.
+// Launch one orchestrator session over the project's @seq-flagged todos, or —
+// when none are flagged — over every Todo/Doing task (see runnableTasks).
 // Same guard + launchClaude path as the single-task build button; pm doesn't
 // supervise the session.
 app.post("/api/projects/:slug/tasks/run-seq", async (req, res, next) => {
@@ -221,14 +228,68 @@ app.post("/api/projects/:slug/tasks/run-seq", async (req, res, next) => {
     if (!SLUG_RE.test(slug)) return res.status(400).json({ error: "bad slug" });
     if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
     const bl = await readBacklog(slug);
-    const tasks = (bl ? bl.tasks : []).filter((t) => t.seq && t.state !== "Done");
-    if (!tasks.length) return res.status(400).json({ error: "no @seq todos" });
+    const { mode, tasks } = runnableTasks(bl ? bl.tasks : []);
+    if (!tasks.length) return res.status(400).json({ error: "no runnable todos" });
     const dir = join(PM_ROOT, slug);
-    const prompt = seedForSequentialRun({ slug, tasks, adhoc: !existsSync(dir) });
-    res.json({ ok: true, count: tasks.length, ...(await launchClaude({ cwd: dir, prompt })) });
+    const relay = unattended(req);
+    const prelaunchUtilization = await checkPreLaunchUtilization();
+    const prompt = seedForSequentialRun({ slug, tasks, adhoc: !existsSync(dir), mode, relay, prelaunchUtilization });
+    const launched = relay
+      ? await launchRelay({ cwd: dir, prompt, label: `${slug} (${tasks.length})`, tasks: tasks.map((t) => ({ slug, title: t.title })) })
+      : await launchClaude({ cwd: dir, prompt });
+    res.json({ ok: true, mode, count: tasks.length, ...launched });
   } catch (e) {
     next(e);
   }
+});
+
+// Newest-added open todos across projects (proxy — see latestTodos in todos.mjs).
+app.get("/api/todos/latest", async (req, res, next) => {
+  try {
+    res.json(await latestTodos({ limit: req.query.limit }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+// One orchestrator session (cwd = workspace root) over a hand-picked cross-project
+// set. Items are re-resolved against the current backlog; any stale id => 409 so the
+// client refreshes (ids are positional). `ideas` items are dropped, not run.
+app.post("/api/tasks/run-cross", async (req, res, next) => {
+  try {
+    if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
+    const items = (req.body || {}).items;
+    if (!Array.isArray(items) || !items.length || items.length > 200)
+      return res.status(400).json({ error: "items required" });
+    if (items.some((i) => !i || !SLUG_RE.test(i.slug || "") || !Number.isInteger(i.id)))
+      return res.status(400).json({ error: "bad item" });
+    const { tasks, stale, skipped } = await resolveCrossItems(items);
+    if (stale.length)
+      return res.status(409).json({ error: "todos changed — refresh and pick again", stale });
+    if (!tasks.length) return res.status(400).json({ error: "no runnable todos (ideas are excluded)" });
+    const relay = unattended(req);
+    const prelaunchUtilization = await checkPreLaunchUtilization();
+    const prompt = seedForCrossProjectRun({ tasks, relay, prelaunchUtilization });
+    const projects = new Set(tasks.map((t) => t.slug)).size;
+    const launched = relay
+      ? await launchRelay({ cwd: PM_ROOT, prompt, label: `${tasks.length} todo(s) / ${projects} project(s)`, tasks })
+      : await launchClaude({ cwd: PM_ROOT, prompt });
+    res.json({ ok: true, count: tasks.length, projects, skipped: skipped.length, ...launched });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Unattended relay jobs (server/relay.mjs), newest first — the Home strip reads this.
+app.get("/api/relay", (_req, res) => {
+  res.json(listRelayJobs(PM_ROOT, { limit: 5 }));
+});
+
+app.delete("/api/relay/:id", (req, res) => {
+  if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
+  const ok = dismissRelay(PM_ROOT, req.params.id);
+  if (!ok) return res.status(409).json({ error: "job is still running — stop it first" });
+  res.json({ ok: true });
 });
 
 app.post("/api/tasks/move", async (req, res, next) => {
@@ -365,7 +426,10 @@ app.get("/api/stream", (req, res) => {
 function ping() {
   for (const res of clients) res.write(`data: ${Date.now()}\n\n`);
 }
-for (const p of [STATE_DIR, BACKLOG_DIR, join(CLAUDE, "pm"), CONTINUOUS_DIR]) {
+try {
+  mkdirSync(relayDir(PM_ROOT), { recursive: true });
+} catch {}
+for (const p of [STATE_DIR, BACKLOG_DIR, join(CLAUDE, "pm"), relayDir(PM_ROOT), CONTINUOUS_DIR]) {
   try {
     watch(p, { persistent: false }, ping);
   } catch {}

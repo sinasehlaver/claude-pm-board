@@ -14,8 +14,28 @@ export const DEFAULT_GRID = {
   other: { input: 3.0, output: 15.0, cache_write_5m: 3.75, cache_write_1h: 6.0, cache_read: 0.3 },
 };
 
+const PRICING_KEY = "pm.pricing-config";
+
+function loadPricingConfig() {
+  try {
+    const stored = localStorage.getItem(PRICING_KEY);
+    return stored ? JSON.parse(stored) : {};
+  } catch {
+    return {};
+  }
+}
+
 export function rateFor(model) {
-  return DEFAULT_GRID[model] || DEFAULT_GRID.other;
+  const config = loadPricingConfig();
+  return config[model] || DEFAULT_GRID[model] || DEFAULT_GRID.other;
+}
+
+export function savePricingConfig(config) {
+  localStorage.setItem(PRICING_KEY, JSON.stringify(config));
+}
+
+export function getPricingConfig() {
+  return loadPricingConfig();
 }
 
 // `row` = { input, output, cache_read, cache_creation_1h, cache_creation_5m } (per-million counts)

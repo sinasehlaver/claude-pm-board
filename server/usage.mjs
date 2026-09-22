@@ -90,7 +90,13 @@ function listSessionFiles() {
 
 async function parseFile(filePath) {
   const turns = [];
-  const seenInFile = new Set();
+  // Streaming assistant turns write the SAME message.id multiple times as the
+  // response fills in, each with a growing usage.output_tokens (e.g. 7, then
+  // 447 tokens for the identical id) — the LAST line for an id carries the
+  // final, complete usage. Index by id so a later line for the same id
+  // overwrites (not skips) the earlier partial one; keeping the first-seen
+  // copy silently undercounted output tokens on every streamed turn.
+  const indexById = new Map();
   const rl = readline.createInterface({
     input: fs.createReadStream(filePath, { encoding: "utf8" }),
     crlfDelay: Infinity,
@@ -105,10 +111,6 @@ async function parseFile(filePath) {
     }
     if (o.type !== "assistant" || !o.message?.usage) continue;
     const id = o.message.id || null;
-    if (id) {
-      if (seenInFile.has(id)) continue;
-      seenInFile.add(id);
-    }
     const ts = o.timestamp ? Date.parse(o.timestamp) : NaN;
     if (Number.isNaN(ts)) continue;
     const usage = o.message.usage;
@@ -118,7 +120,13 @@ async function parseFile(filePath) {
     tokens.cache_read = usage.cache_read_input_tokens || 0;
     tokens.cache_creation_1h = usage.cache_creation?.ephemeral_1h_input_tokens || 0;
     tokens.cache_creation_5m = usage.cache_creation?.ephemeral_5m_input_tokens || 0;
-    turns.push({ id, ts, model: o.message.model || "unknown", ...tokens });
+    const turn = { id, ts, model: o.message.model || "unknown", ...tokens };
+    if (id && indexById.has(id)) {
+      turns[indexById.get(id)] = turn;
+    } else {
+      if (id) indexById.set(id, turns.length);
+      turns.push(turn);
+    }
   }
   return turns;
 }
@@ -152,7 +160,7 @@ export async function allTurns() {
     }
     for (const t of fileTurns) {
       if (t.id) {
-        if (kind === "subagent" && globalSeen.has(t.id)) continue;
+        if (globalSeen.has(t.id)) continue;
         globalSeen.add(t.id);
       }
       turns.push(t);
@@ -371,64 +379,6 @@ export function writeUsageLimitsWindow(key, patch) {
   return cfg;
 }
 
-// Anthropic's real 5h/7d windows tick on a fixed GRID, not a per-prompt
-// rolling anchor: whichever conversation starts an idle chain sets the grid's
-// phase, and every window after that lands on anchor + k*windowMs regardless
-// of whether you were active in it — a gap shorter than one full windowMs
-// (e.g. a 6h break inside a 5h grid) still lands the next message inside the
-// *next scheduled* block, it does NOT restart the clock at that message's own
-// timestamp. The chain only actually breaks — and the next message becomes a
-// brand-new anchor — once an entire windowMs block passes with zero activity
-// in it. Confirmed against the user's own claude.ai reading: a real
-// conversation 7 minutes past a scheduled block boundary still reset at that
-// scheduled boundary time (22:10), not 5h after the 7-minutes-late message
-// (22:17) — ruling out the simpler "reset on next prompt after any gap ≥
-// windowMs" model tried first. Reconstructed by replaying every local turn in
-// order, advancing the grid one block at a time when a turn lands in the
-// immediately-next scheduled block, and only re-anchoring when a turn skips
-// more than one block ahead (proof a whole block passed empty). Only as good
-// as local session-log history (no record of requests from other
-// machines/clients), which is why manual mode still reports this as a
-// projection, not a synced-cache-grade fact.
-function fixedGridBlock(sortedTurns, now, windowMs) {
-  let anchor = null;
-  let blockEnd = null; // end of the currently-confirmed-active grid block
-  for (const t of sortedTurns) {
-    if (t.ts > now) continue;
-    if (anchor === null) {
-      anchor = t.ts;
-      blockEnd = anchor + windowMs;
-      continue;
-    }
-    if (t.ts < blockEnd) continue; // still inside the current block — chain unchanged
-    const blocksAdvanced = Math.floor((t.ts - blockEnd) / windowMs) + 1;
-    if (blocksAdvanced > 1) {
-      // at least one full block passed with nothing in it — chain broken
-      anchor = t.ts;
-      blockEnd = anchor + windowMs;
-    } else {
-      // lands in the very next scheduled block — grid continues untouched
-      blockEnd += windowMs;
-    }
-  }
-  return anchor === null ? null : { anchor, blockEnd };
-}
-
-// Usage + reset for the *current* grid block (see fixedGridBlock above). If
-// the last-known block already elapsed with no activity confirming the next
-// one yet, there is no open window right now — usedTokens is 0 and resetAt is
-// null (the next window, and its reset time, becomes knowable only once a new
-// prompt lands and either extends the grid or re-anchors it).
-function fixedWindowUsage(turns, now, windowMs) {
-  const sorted = [...turns].sort((a, b) => a.ts - b.ts);
-  const block = fixedGridBlock(sorted, now, windowMs);
-  if (block === null || now >= block.blockEnd) return { usedTokens: 0, resetAt: null };
-  const blockStart = block.blockEnd - windowMs;
-  let usedTokens = 0;
-  for (const t of sorted) if (t.ts >= blockStart && t.ts <= now) usedTokens += tokenSum(t);
-  return { usedTokens, resetAt: new Date(block.blockEnd).toISOString() };
-}
-
 // Only meaningful once actually over the cap: projects the future moment your
 // own historical turns would age out of the rolling window enough to bring
 // the sum back at/under the cap, assuming zero further activity from now.
@@ -469,12 +419,13 @@ function liveCacheFor(cache, key) {
 //                 throttle, else a placeholder), with a *projected* reset.
 //   "manual"    — token burn against a user-entered cap that never changes on
 //                 its own (set it once via writeUsageLimitsWindow and it stays
-//                 exactly as set until edited again), computed over
-//                 Anthropic's actual fixed grid (fixedWindowUsage/
-//                 fixedGridBlock) rather than a rolling trailing-N sum: once a
-//                 conversation sets the grid's phase, resets land on that
-//                 fixed schedule (anchor + k*windowMs) whether or not you're
-//                 still active, and only a full idle block resets the phase.
+//                 exactly as set until edited again). Same rolling-sum math as
+//                 estimated — an earlier version reconstructed Anthropic's
+//                 rate-limit windows as a fixed reset grid instead, which
+//                 looked plausible in isolation but measurably undercounted
+//                 against real references (claude.ai's own Usage page,
+//                 claude_usage_dashboard): rolling sum is what actually
+//                 tracks them.
 export async function accountRateLimitStatus(now = Date.now()) {
   const cache = rateLimitStatus();
   const cfg = readUsageLimitsConfig();
@@ -508,18 +459,26 @@ export async function accountRateLimitStatus(now = Date.now()) {
         entry = { available: false, utilization: null, capTokens: null, usedTokens: used, resetAt: null, resetProjected: false, limitStatus: null };
       }
     } else if (mode === "manual") {
+      // Previously computed against a reconstructed Anthropic fixed reset
+      // grid (see git history / removed fixedGridBlock/fixedWindowUsage).
+      // That theory read believable in isolation but under real comparison —
+      // claude.ai's own Usage page and the separate claude_usage_dashboard
+      // app — it undercounted: e.g. it reported 5h at 55% while claude.ai
+      // reported 99%, because the reconstructed "current block" doesn't
+      // reliably track when Anthropic's real window opened (its start can
+      // only be pinned exactly at a real quotaLimits rejection, which is
+      // rare). The plain rolling sum below, checked against both of those
+      // real references, tracks them far more closely. Manual mode is now
+      // just "estimated mode's math against a cap you type in yourself."
       const capTokens = cfg[w.key].manualCapTokens;
       if (capTokens) {
-        // Manual is the one mode where "correct" means matching Anthropic's
-        // actual fixed-window mechanics, not a rolling sum — see
-        // fixedWindowUsage above.
-        const { usedTokens: fixedUsed, resetAt } = fixedWindowUsage(turns, now, w.ms);
+        const r = projectedResetMs(turns, now, w.ms, used, capTokens);
         entry = {
           available: true,
-          utilization: Math.round((fixedUsed / capTokens) * 100),
+          utilization: Math.round((used / capTokens) * 100),
           capTokens,
-          usedTokens: fixedUsed,
-          resetAt,
+          usedTokens: used,
+          resetAt: r ? new Date(r).toISOString() : null,
           resetProjected: true,
           limitStatus: null,
         };
@@ -576,4 +535,22 @@ export function rateLimitStatus() {
     reset5hAt: toIso(u.reset5hAt),
     reset7dAt: toIso(u.reset7dAt),
   };
+}
+
+// Check if utilization is already high before starting a batch run.
+// Mirrors the relay's soft-stop thresholds (PM_RELAY_STOP_5H=0.95, PM_RELAY_STOP_7D=0.97).
+// Returns null if launch is safe, or { window, utilization, resetAt } if too high.
+export async function checkPreLaunchUtilization(thresholds = { "5h": 0.95, "7d": 0.97 }) {
+  try {
+    const status = await accountRateLimitStatus();
+    for (const [windowKey, threshold] of Object.entries(thresholds)) {
+      const entry = status.windows?.[windowKey];
+      if (entry?.available && entry.utilization != null && entry.utilization >= threshold * 100) {
+        return { window: windowKey, utilization: entry.utilization, resetAt: entry.resetAt };
+      }
+    }
+  } catch {
+    // On error, allow launch to proceed (don't block on usage check failure)
+  }
+  return null;
 }
