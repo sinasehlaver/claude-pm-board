@@ -180,6 +180,13 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 }
 .srow select:hover { border-color: color-mix(in srgb, var(--line) 40%, var(--muted)); }
 .srow select:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+.srow input {
+  font: inherit; color: var(--text); background: var(--surface2); min-width: 0; flex: 1 1 140px;
+  border: 1px solid var(--line); border-radius: var(--radius-xs); padding: 7px 9px;
+  transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+}
+.srow input:hover { border-color: color-mix(in srgb, var(--line) 40%, var(--muted)); }
+.srow input:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 .srow button {
   font: inherit; cursor: pointer; border-radius: var(--radius-xs); border: 1px solid var(--line);
   background: var(--surface2); color: var(--text); padding: 7px 11px; font-size: 13px;
@@ -332,6 +339,25 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   display: inline-block; font-size: 10px; transition: transform 0.16s var(--ease);
 }
 .tg h3.tg-toggle .chevron.open { transform: rotate(90deg); }
+.lt h3.tg-toggle {
+  display: flex; align-items: center; gap: 6px; margin: 0; user-select: none; color: var(--muted);
+  font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  transition: color 0.14s var(--ease);
+}
+.lt h3.tg-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--radius-xs); }
+.lt h3.tg-toggle .chevron { display: inline-block; font-size: 11px; transition: transform 0.16s var(--ease), color 0.14s var(--ease); }
+.lt h3.tg-toggle .chevron.open { transform: rotate(90deg); }
+.lt-head {
+  cursor: pointer; user-select: none; margin: -6px -8px 4px; padding: 6px 8px;
+  border-radius: var(--radius-sm); border: 1px solid transparent;
+  transition: background-color 0.14s var(--ease), border-color 0.14s var(--ease), transform 0.1s var(--ease);
+}
+.lt-head:not(.open) { margin-bottom: -6px; }
+.lt-head:hover { background: var(--accent-tint); border-color: color-mix(in srgb, var(--line) 50%, var(--accent)); }
+.lt-head:hover h3.tg-toggle { color: var(--text); }
+.lt-head:hover .chevron { color: var(--accent); }
+.lt-head:active { background: color-mix(in srgb, var(--accent-tint) 60%, var(--accent) 12%); transform: scale(0.992); }
+.lt-head:focus-within:has(h3:focus-visible) { background: var(--accent-tint); }
 .task {
   background: var(--surface2); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 10px 12px; margin-bottom: 8px;
@@ -360,7 +386,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 .timeline .k { color: var(--accent); }
 .timeline .d { color: var(--muted); font-variant-numeric: tabular-nums; }
 
-/* continuous */
+/* pill / table (usage, relay, home) */
 .pill {
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 9px;
   border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
@@ -368,14 +394,6 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 }
 .pill.on { color: #fff; background: #2fae63; border-color: #2fae63; box-shadow: var(--shadow-sm); }
 .pill.bad { color: #fff; background: var(--bad); border-color: var(--bad); box-shadow: var(--shadow-sm); }
-.cdecide { margin: 0 0 10px; line-height: 1.5; }
-.cfail { color: var(--bad); font-size: 13px; margin: 8px 0 0; }
-.cmeter { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 12.5px; }
-.cmeter-l { color: var(--muted); }
-.cmeter-track { height: 8px; background: var(--surface2); border-radius: 5px; overflow: hidden; }
-.cmeter-fill { display: block; height: 100%; background: var(--accent); transition: width 0.3s var(--ease); }
-.cmeter-fill.bad { background: var(--bad); }
-.cmeter-v { color: var(--muted); font-variant-numeric: tabular-nums; }
 .ctable { width: 100%; border-collapse: collapse; font-size: 12px; }
 .ctable td { padding: 5px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .ctable td.num { text-align: right; font-variant-numeric: tabular-nums; }

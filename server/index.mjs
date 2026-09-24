@@ -3,15 +3,14 @@ import { execFile } from "node:child_process";
 import { existsSync, watch, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PM_ROOT, CLAUDE, STATE_DIR, BACKLOG_DIR, CONTINUOUS_DIR } from "./paths.mjs";
+import { PM_ROOT, CLAUDE, STATE_DIR, BACKLOG_DIR } from "./paths.mjs";
 import { listProjects, getProject } from "./projects.mjs";
 import { readState, writeState } from "./state.mjs";
 import { readBacklog, writeBacklog, emptyBacklog, runnableTasks } from "./backlog.mjs";
-import { listSessions, fileSession, sessionToTask, moveTask } from "./sessions.mjs";
+import { listSessions, fileSession, sessionToTask, sessionToNewProject, moveTask } from "./sessions.mjs";
 import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, launchClaude, launchRelay } from "./launch.mjs";
 import { listRelayJobs, relayDir, dismissRelay } from "./relay.mjs";
 import { latestTodos, resolveCrossItems } from "./todos.mjs";
-import * as continuous from "./continuous.mjs";
 import {
   burnSnapshot,
   burnBreakdown,
@@ -191,6 +190,19 @@ app.post("/api/sessions/:id/task", async (req, res, next) => {
   }
 });
 
+app.post("/api/sessions/:id/new-project", async (req, res, next) => {
+  try {
+    if (!SESSION_ID_RE.test(req.params.id)) return res.status(400).json({ error: "bad id" });
+    const slug = await sessionToNewProject(req.params.id, (req.body || {}).name);
+    res.status(201).json({ slug, ...(await listSessions()) });
+  } catch (e) {
+    if (e.code === "BAD_SLUG") return res.status(400).json({ error: e.message });
+    if (e.code === "EXISTS") return res.status(409).json({ error: e.message });
+    if (/no such session/.test(e.message)) return res.status(404).json({ error: e.message });
+    next(e);
+  }
+});
+
 app.post("/api/sessions/:id/resume", async (req, res, next) => {
   try {
     if (!SESSION_ID_RE.test(req.params.id)) return res.status(400).json({ error: "bad id" });
@@ -305,73 +317,6 @@ app.post("/api/tasks/move", async (req, res, next) => {
   }
 });
 
-// --- continuous runner bridge --------------------------------------------
-app.get("/api/continuous", async (_req, res, next) => {
-  try {
-    res.json(await continuous.readStatus());
-  } catch (e) {
-    next(e);
-  }
-});
-
-app.get("/api/continuous/log", async (req, res, next) => {
-  try {
-    res.json(await continuous.readLog(Math.min(Number(req.query.n) || 100, 500)));
-  } catch (e) {
-    next(e);
-  }
-});
-
-app.get("/api/continuous/queue", async (_req, res, next) => {
-  try {
-    res.json(await continuous.readQueue());
-  } catch (e) {
-    next(e);
-  }
-});
-
-app.put("/api/continuous/config", async (req, res, next) => {
-  try {
-    if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
-    await continuous.writeConfig(req.body || {});
-    res.json(await continuous.readStatus());
-  } catch (e) {
-    next(e);
-  }
-});
-
-app.post("/api/continuous/toggle", async (req, res, next) => {
-  try {
-    if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
-    await continuous.writeConfig({ human_at_keyboard: !!(req.body || {}).on });
-    res.json(await continuous.readStatus());
-  } catch (e) {
-    next(e);
-  }
-});
-
-app.post("/api/continuous/runner", async (req, res, next) => {
-  try {
-    if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
-    const action = (req.body || {}).action;
-    if (!["tick", "start", "stop"].includes(action))
-      return res.status(400).json({ error: "bad action" });
-    res.json(await continuous.runnerControl(action));
-  } catch (e) {
-    next(e);
-  }
-});
-
-app.post("/api/continuous/clear-failure", async (req, res, next) => {
-  try {
-    if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
-    await continuous.clearFailure();
-    res.json(await continuous.readStatus());
-  } catch (e) {
-    next(e);
-  }
-});
-
 // --- usage / burn rate -------------------------------------------------
 app.get("/api/usage/burn", async (_req, res, next) => {
   try {
@@ -429,7 +374,7 @@ function ping() {
 try {
   mkdirSync(relayDir(PM_ROOT), { recursive: true });
 } catch {}
-for (const p of [STATE_DIR, BACKLOG_DIR, join(CLAUDE, "pm"), relayDir(PM_ROOT), CONTINUOUS_DIR]) {
+for (const p of [STATE_DIR, BACKLOG_DIR, join(CLAUDE, "pm"), relayDir(PM_ROOT)]) {
   try {
     watch(p, { persistent: false }, ping);
   } catch {}

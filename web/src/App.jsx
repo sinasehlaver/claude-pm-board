@@ -3,7 +3,6 @@ import { get, onStream } from "./api";
 import Home from "./Home.jsx";
 import Project from "./Project.jsx";
 import Sessions from "./Sessions.jsx";
-import Continuous from "./Continuous.jsx";
 import Usage from "./Usage.jsx";
 import Help from "./Help.jsx";
 
@@ -38,21 +37,18 @@ function ThemeToggle() {
 // URL <-> {view, sel} — hand-rolled, no router lib. Paths:
 //   "/"               -> home
 //   "/sessions"        -> sessions
-//   "/continuous"       -> continuous
 //   "/usage"           -> usage
 //   "/project/<slug>"  -> project view for slug
 function parsePath(pathname) {
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] === "project" && parts[1]) return { view: "home", sel: decodeURIComponent(parts[1]) };
   if (parts[0] === "sessions") return { view: "sessions", sel: null };
-  if (parts[0] === "continuous") return { view: "continuous", sel: null };
   if (parts[0] === "usage") return { view: "usage", sel: null };
   return { view: "home", sel: null };
 }
 function pathFor(view, sel) {
   if (sel) return "/project/" + encodeURIComponent(sel);
   if (view === "sessions") return "/sessions";
-  if (view === "continuous") return "/continuous";
   if (view === "usage") return "/usage";
   return "/";
 }
@@ -60,9 +56,8 @@ function pathFor(view, sel) {
 export default function App() {
   const [projects, setProjects] = useState(null);
   const [sessions, setSessions] = useState({ inbox: [], filed: [] });
-  const [cont, setCont] = useState({ status: null, log: [] });
   const initial = parsePath(window.location.pathname);
-  const [view, setView] = useState(initial.view); // "home" | "sessions" | "continuous" | "usage"
+  const [view, setView] = useState(initial.view); // "home" | "sessions" | "usage"
   const [sel, setSel] = useState(initial.sel);
   const [detail, setDetail] = useState(null);
   const fromPopstate = useRef(false);
@@ -70,13 +65,6 @@ export default function App() {
   const loadList = useCallback(() => get("/projects").then(setProjects), []);
   const loadSessions = useCallback(() => get("/sessions").then(setSessions), []);
   const loadDetail = useCallback((s) => get("/projects/" + s).then(setDetail), []);
-  const loadCont = useCallback(
-    () =>
-      Promise.all([get("/continuous"), get("/continuous/log?n=60")]).then(([status, log]) =>
-        setCont({ status, log }),
-      ),
-    [],
-  );
 
   useEffect(() => {
     loadList();
@@ -88,19 +76,14 @@ export default function App() {
     else setDetail(null);
   }, [sel, loadDetail]);
 
-  useEffect(() => {
-    if (view === "continuous") loadCont();
-  }, [view, loadCont]);
-
   useEffect(
     () =>
       onStream(() => {
         loadList();
         loadSessions();
         if (sel) loadDetail(sel);
-        if (view === "continuous") loadCont();
       }),
-    [sel, view, loadList, loadSessions, loadDetail, loadCont],
+    [sel, loadList, loadSessions, loadDetail],
   );
 
   // back/forward: restore {view, sel} from the URL the browser navigated to
@@ -141,8 +124,6 @@ export default function App() {
       onOpen={setSel}
       reload={loadSessions}
     />
-  ) : view === "continuous" ? (
-    <Continuous status={cont.status} log={cont.log} onBack={() => setView("home")} reload={loadCont} />
   ) : view === "usage" ? (
     <Usage onBack={() => setView("home")} />
   ) : (
@@ -151,7 +132,6 @@ export default function App() {
       inboxCount={sessions.inbox.length}
       onOpen={setSel}
       onSessions={() => setView("sessions")}
-      onContinuous={() => setView("continuous")}
       onUsage={() => setView("usage")}
       reload={loadList}
     />

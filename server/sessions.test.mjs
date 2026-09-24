@@ -79,3 +79,26 @@ test("moveTask relocates a bullet between backlog files", async () => {
   assert.match(readFileSync(join(root, ".claude", "backlog", "checker.md"), "utf8"), /- existing/);
   assert.ok(existsSync(join(root, ".claude", "backlog", "checker.md")));
 });
+
+// ---- new-project scaffold ----------------------------------------------
+test("sessionToNewProject scaffolds files, files the session, seeds a Todo", async () => {
+  const slug = await s.sessionToNewProject("aaaa1111-2222-3333", "Cool App");
+  assert.equal(slug, "cool-app");
+  for (const p of ["cool-app/README.md", "cool-app/CONTEXT.md", ".claude/state/cool-app.md", ".claude/backlog/cool-app.md", ".claude/rules/cool-app.md"])
+    assert.ok(existsSync(join(root, p)), p);
+  assert.match(readFileSync(join(root, ".claude", "rules", "cool-app.md"), "utf8"), /## Run & verify/);
+  assert.ok(readFileSync(join(root, ".claude", "state", "cool-app.md"), "utf8").split("\n").length <= 40);
+  assert.match(readFileSync(join(root, ".claude", "backlog", "cool-app.md"), "utf8"), /- resume: Build hub widget/);
+  const idx = JSON.parse(readFileSync(join(pm, "session-index.json"), "utf8"));
+  assert.equal(idx["aaaa1111-2222-3333"].project, "cool-app");
+  assert.ok(!existsSync(join(root, "cool-app", ".git")));
+});
+
+test("scaffold rejects existing, traversal, bad names, unknown session", async () => {
+  await assert.rejects(s.sessionToNewProject("aaaa1111-2222-3333", "cool-app"), { code: "EXISTS" });
+  await assert.rejects(s.sessionToNewProject("aaaa1111-2222-3333", "hub"), { code: "EXISTS" }); // backlog file only
+  for (const bad of ["../evil", "a/b", "", "-x", "a--b", "x".repeat(50), "ünï"])
+    await assert.rejects(s.sessionToNewProject("aaaa1111-2222-3333", bad), { code: "BAD_SLUG" }, bad);
+  await assert.rejects(s.sessionToNewProject("dead0000-0000", "fresh"), /no such session/);
+  assert.ok(!existsSync(join(root, "fresh")));
+});

@@ -370,8 +370,7 @@ function seedForIdeaPromotion({ tasks, relay = false, prelaunchUtilization = nul
 
 // Open a Mac terminal running an arbitrary command in `cwd`. Same osascript /
 // iTerm-else-Terminal path as launchClaude; `PM_LAUNCH_DRYRUN=1` returns the
-// command instead of spawning. Used to start `continuous`'s runner loop in a
-// visible window (pm stays out of process supervision).
+// command instead of spawning. Used by the relay launch.
 export function launchCommand({ cwd, inner: cmd }) {
   const dir = cwd && existsSync(cwd) ? cwd : PM_ROOT;
   const inner = `cd ${shq(dir)} && ${cmd}`;

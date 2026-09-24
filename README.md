@@ -21,14 +21,17 @@ by most recent activity.
   project. The input at the top of the home screen ("💡 capture an idea…") drops a
   one-line task straight into the Ideas backlog without you having to pick a project
   first; sort it into a real project later (see "Ideas inbox" below).
-- **Latest todos** (below the cards) is a cross-project panel: an "add a todo…" box
+- **Latest todos** (below the cards) is a cross-project panel — click anywhere on its
+  header row to expand/collapse it — with an "add a todo…" box
   with a project dropdown (remembers your last pick in `localStorage`; posts to the
   normal `POST /api/projects/:slug/tasks`), then the most recently added open
   (Todo/Doing) todos across all projects, newest first, each with a checkbox. **▶▶ Run
   selected (N)** launches ONE orchestrator session at the workspace root over the
   ticked todos (**▶▶ Run all listed (N)** when none are ticked; no confirm dialog — a short inline notice reports the launch);
   todos in different projects run in parallel, same-project ones sequentially. Ideas
-  are neither listed nor run here (they have their own flow). Backed by
+  are neither listed nor run here (they have their own flow). Projects hidden via the
+  Home **Filter** are also left out of the list, the run, and the add-todo dropdown
+  (client-side, so the 30-item fetch is trimmed after fetching). Backed by
   `GET /api/todos/latest?limit=N` and `POST /api/tasks/run-cross` (`{items:[{slug,id,title}]}`,
   same loopback-or-`PM_TOKEN` guard as the other launch routes). Backlog files store
   no created-at date, so "newest" is a proxy: most recently modified backlog file
@@ -43,7 +46,7 @@ by most recent activity.
   `localStorage`, so it doesn't affect anyone else's view, and nothing is deleted —
   a hidden project's files are untouched and it still shows up everywhere else, e.g.
   when moving a task). The Filter button shows a badge with the current hidden count.
-- **Sessions** and **Continuous** are links to the two other top-level views, covered
+- **Sessions** and **Usage** are links to the two other top-level views, covered
   below.
 - A light/dark **theme toggle** (☀/☾, top-right) persists your choice in
   `localStorage`; absent a stored choice it follows the OS's `prefers-color-scheme`.
@@ -306,6 +309,15 @@ touched files matched. From a row you can:
   `resume: <session title>`, with a note containing the session's first message and
   its id (`POST /api/sessions/:id/task`), so you can pick the conversation back up
   from the backlog later.
+- Pick **+ New project…** from the dropdown, type a name, hit **create + file** —
+  scaffolds a new project (`POST /api/sessions/:id/new-project`, `{name}`): `<name>/`
+  with `README.md` + `CONTEXT.md` stubs under the workspace root, plus
+  `.claude/state/<slug>.md`, `.claude/backlog/<slug>.md` and `.claude/rules/<slug>.md`
+  (with a `## Run & verify` placeholder), then files the session to it and seeds the
+  same `resume: …` Todo as **→ task**. The name is lowercased, spaces become dashes;
+  only `[a-z0-9-]` (max 40) is accepted, and it 409s if the directory or any of the
+  three `.claude` files already exists. No `git init`; adding the project to the
+  workspace `CLAUDE.md` table is still a manual step.
 - Hit **reopen** — relaunches that exact session via
   `claude --resume <sessionId>` in a new terminal (`POST /api/sessions/:id/resume`,
   loopback-or-`PM_TOKEN` guarded, same as the build buttons).
@@ -315,40 +327,13 @@ touched files matched. From a row you can:
 A project's own detail page also shows a **Sessions** block listing sessions already
 filed to it, each with its own **reopen** button.
 
-### Continuous tab (optional)
-
-If a `continuous/` project exists alongside `pm/` (the autonomous backlog runner —
-see `CONTINUOUS_ROOT` in Configuration), the **Continuous** link on the home screen
-opens a dashboard over its runtime state:
-
-- **Runner** — whether the runner process is alive (with its pid) or stopped, plus
-  what it would do right now ("▶ would run" / "⏸ sleeping" and why). Three controls:
-  **Tick now** (runs one action immediately), **Start loop** (opens a terminal
-  running `npm start` in the `continuous/` directory), **Stop** (sends `SIGTERM` to
-  the running process). If the last run failed, a **clear** button resets that
-  failure flag.
-- **Budget** — usage meters against the configured 5-hour and 7-day token caps, plus
-  the current pace (tokens/hour) versus target.
-- **Now** — the action currently in progress, if any.
-- **Activity** — a recent-actions log (timestamp, project, action, model, tokens
-  used, over-estimate ratio, cost, pass/fail).
-- **Config** — an editable form for the runner's tunables (`cap_5h`, `cap_7d`,
-  `safety`, `active_hours_per_day`, `min_action_tokens`, the `human_at_keyboard`
-  on/off toggle, and the raw `pool` JSON).
-
-Importantly, **pm does not supervise the runner process itself** — "Start" just opens
-a visible terminal running it, and pm only reads/displays its state files
-(`.claude/continuous/{state.json,log.jsonl,plans/,runner.lock}`) and a few of its pure
-logic modules in-process. If `continuous/` isn't present, pm boots fine and the tab
-shows a short explainer instead.
-
 ### Usage tab: burn rate and cost
 
 The **Usage** link on the home screen opens a dashboard over your Claude Code token
 usage, and the home screen itself shows a compact burn-rate strip that links into it.
 This is a self-contained feature — pm parses `~/.claude/projects/**/*.jsonl` directly,
 so it works with no other project installed or running (it reuses the calculation
-mechanics from `claude_usage_dashboard` and `continuous`, not those apps themselves):
+mechanics from `claude_usage_dashboard`, not that app itself):
 
 - **Burn rate** — rolling token totals over the last 1h/5h/7d, across every session on
   the machine (main sessions + subagent/tool-result transcripts, deduped by message id).
@@ -366,7 +351,7 @@ anthropic.com for current rates, not a billing statement.
 ### Web app / desktop shell
 
 The front end is a mobile-first single-page app, with its own URL routing (`/`,
-`/project/<slug>`, `/sessions`, `/continuous`) so back/forward work as expected. On
+`/project/<slug>`, `/sessions`, `/usage`) so back/forward work as expected. On
 macOS, `npm run app` builds it
 and wraps it in a minimal Electron shell (`electron/main.cjs`) for a standalone
 desktop app instead of a browser tab; `npm run app:dmg` packages a distributable
@@ -411,7 +396,6 @@ All optional, via environment variables:
 | `PM_PORT` / `PORT` | `4500` | Server port. |
 | `PM_TOKEN` | _(unset)_ | Optional shared secret. When set, launch/resume routes require `?token=` or an `x-pm-token` header. Needed to use the build button from a phone. |
 | `PM_RELAY_*` | see "Unattended by default" | Thresholds/timings for the unattended run relay (macOS only). |
-| `CONTINUOUS_ROOT` | `$PM_ROOT/continuous` | Location of the optional autonomous-runner project the Continuous tab drives. pm boots fine without it. |
 
 ## Workspace layout it expects
 

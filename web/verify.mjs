@@ -93,17 +93,6 @@ try {
   );
   if (n <= before) fail(`task not persisted (api tasks=${n}, before=${before})`);
 
-  // Continuous tab renders (fixture has config.json but no src/ — decision errors, blocks still draw)
-  await page.goto(BASE, { waitUntil: "networkidle" });
-  await page.waitForSelector(".card");
-  await page.locator(".bar-actions .link", { hasText: "Continuous" }).click();
-  await page.waitForSelector(".block-head h2");
-  const cheads = await page.$$eval(".block-head h2", (e) =>
-    e.map((x) => x.textContent.toLowerCase()),
-  );
-  for (const want of ["runner", "budget", "config"])
-    if (!cheads.includes(want)) fail(`Continuous: no ${want} block: ${cheads}`);
-
   if (errors.length) fail(`page errors: ${errors.join(" | ")}`);
   if (!process.exitCode) console.log("browser check OK");
 } finally {
