@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { ago, send } from "./api";
 
+const NEW = "__new__";
+
 export default function Sessions({ data, projects, onBack, reload }) {
   const [showFiled, setShowFiled] = useState(false);
   const slugs = projects.map((p) => p.slug);
@@ -44,6 +46,9 @@ export default function Sessions({ data, projects, onBack, reload }) {
 
 function Row({ s, slugs, reload, filed }) {
   const [pick, setPick] = useState(s.project || "");
+  const [name, setName] = useState("");
+  const isNew = pick === NEW;
+  const create = () => call("POST", `/sessions/${s.id}/new-project`, { name });
   const call = async (method, path, body) => {
     try {
       await send(method, path, body);
@@ -79,19 +84,37 @@ function Row({ s, slugs, reload, filed }) {
               {sl}
             </option>
           ))}
+          <option value={NEW}>+ New project…</option>
         </select>
-        <button
-          disabled={!pick}
-          onClick={() => call("PUT", `/sessions/${s.id}`, { project: pick })}
-        >
-          file
-        </button>
-        <button
-          disabled={!pick}
-          onClick={() => call("POST", `/sessions/${s.id}/task`, { project: pick })}
-        >
-          → task
-        </button>
+        {isNew ? (
+          <>
+            <input
+              value={name}
+              placeholder="new project name"
+              autoFocus
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && name.trim() && create()}
+            />
+            <button disabled={!name.trim()} onClick={create}>
+              create + file
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              disabled={!pick}
+              onClick={() => call("PUT", `/sessions/${s.id}`, { project: pick })}
+            >
+              file
+            </button>
+            <button
+              disabled={!pick}
+              onClick={() => call("POST", `/sessions/${s.id}/task`, { project: pick })}
+            >
+              → task
+            </button>
+          </>
+        )}
         <button onClick={() => call("POST", `/sessions/${s.id}/resume`)}>reopen</button>
         {!filed && (
           <button onClick={() => call("PUT", `/sessions/${s.id}`, { archived: true })}>

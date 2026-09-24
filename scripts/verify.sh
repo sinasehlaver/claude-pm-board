@@ -75,15 +75,7 @@ Updated: 2026-09-09
 EOF
 echo '[{"project":"hub","date":"2026-09-07T18:00:00Z","kind":"commit","summary":"diet widgets","ref":"a1b2c3d"}]' > "$fix/.claude/pm/activity.json"
 
-# continuous runner fixture (no src/ — the bridge must degrade gracefully)
-mkdir -p "$fix/.claude/continuous" "$fix/continuous"
-cat > "$fix/continuous/config.json" <<'EOF'
-{ "cap_5h": 25000000, "cap_7d": 200000000, "safety": 0.85, "active_hours_per_day": 24,
-  "min_action_tokens": 200000, "human_at_keyboard": false,
-  "pool": [{ "id": "claude-haiku-4-5", "effort": "low", "w": 1 }] }
-EOF
-
-export PM_ROOT="$fix" PORT="$port" PM_LAUNCH_DRYRUN=1 CONTINUOUS_ROOT="$fix/continuous"
+export PM_ROOT="$fix" PORT="$port" PM_LAUNCH_DRYRUN=1
 node server/index.mjs &
 PID=$!
 trap 'kill $PID 2>/dev/null; wait $PID 2>/dev/null; rm -rf "$fix" "$sdir"' EXIT
@@ -140,11 +132,6 @@ curl -sf -X POST "$B/api/tasks/run-cross" -H content-type:application/json -d "$
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$B/api/tasks/run-cross" -H content-type:application/json -d '{"items":[{"slug":"hub","id":0,"title":"not the title"}]}')
 [ "$code" = "409" ] || { echo "expected 409 for stale item, got $code"; exit 1; }
 echo "stale item -> 409"
-
-echo "--- /api/continuous"
-curl -sf "$B/api/continuous" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.config||d.config.cap_5h!==25000000)process.exit(1);if(!("runner"in d))process.exit(1);console.log("continuous: runner.alive =",d.runner.alive,"| config loaded")'
-curl -sf -X PUT "$B/api/continuous/config" -H content-type:application/json -d '{"safety":0.9,"nope":1}' >/dev/null
-curl -sf "$B/api/continuous" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(d.config.safety!==0.9)process.exit(1);if("nope"in d.config)process.exit(1);console.log("continuous: config PUT whitelisted")'
 
 if [ -f web/dist/index.html ] && [ -f web/verify.mjs ]; then
   echo "--- browser check"

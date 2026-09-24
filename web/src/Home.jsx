@@ -28,7 +28,7 @@ function loadHidden() {
   }
 }
 
-export default function Home({ projects, inboxCount, onOpen, onSessions, onContinuous, onUsage, reload }) {
+export default function Home({ projects, inboxCount, onOpen, onSessions, onUsage, reload }) {
   const [idea, setIdea] = useState("");
   const [hidden, setHidden] = useState(loadHidden);
   const [showFilter, setShowFilter] = useState(false);
@@ -105,12 +105,6 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onConti
               Usage
             </button>
             <Help text="Token/cost burn rate across every Claude Code session on this machine, and your account's rate-limit ceiling." />
-          </span>
-          <span className="bar-item">
-            <button className="link" onClick={onContinuous}>
-              Continuous
-            </button>
-            <Help text="The autonomous runner that keeps working through a project's backlog on its own, without a live chat session." />
           </span>
           <span className="bar-item">
             <button className="link" onClick={onSessions}>
@@ -201,7 +195,7 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onConti
         </ul>
       )}
 
-      {projects !== null && <LatestTodos projects={projects} reload={reload} />}
+      {projects !== null && <LatestTodos projects={projects} reload={reload} hidden={hidden} />}
     </div>
   );
 }

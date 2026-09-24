@@ -12,7 +12,7 @@ const keyOf = (t) => `${t.slug}\u0000${t.title}`;
 
 // Home panel: add a todo to any project + the most recently added open todos
 // across all projects (newest first), selectable for one cross-project run.
-export default function LatestTodos({ projects, reload }) {
+export default function LatestTodos({ projects, reload, hidden = [] }) {
   const [todos, setTodos] = useState(null);
   const [picked, setPicked] = useState(() => new Set());
   const [title, setTitle] = useState("");
@@ -26,7 +26,7 @@ export default function LatestTodos({ projects, reload }) {
   });
 
   // ideas have their own capture box + promotion flow, so they aren't offered here
-  const targets = (projects || []).filter((p) => !p.pinned && p.slug !== "ideas");
+  const targets = (projects || []).filter((p) => !p.pinned && p.slug !== "ideas" && !hidden.includes(p.slug));
   const target = targets.some((p) => p.slug === slug) ? slug : targets[0]?.slug || "";
 
   const load = useCallback(
@@ -92,7 +92,7 @@ export default function LatestTodos({ projects, reload }) {
     }
   }
 
-  const list = todos || [];
+  const list = (todos || []).filter((t) => !hidden.includes(t.slug));
   const chosen = list.filter((t) => picked.has(keyOf(t)));
   const runList = chosen.length ? chosen : list;
   const allMode = !chosen.length;
@@ -123,14 +123,18 @@ export default function LatestTodos({ projects, reload }) {
 
   return (
     <section className="block lt">
-      <div className="block-head">
+      <div
+        className={"block-head lt-head" + (open ? " open" : "")}
+        onClick={(e) => {
+          if (!e.target.closest("button:not(.lt-head-toggle), input, select")) handleToggle();
+        }}
+      >
         <span className="block-head-title">
           <h3
-            className="tg-toggle"
+            className="tg-toggle lt-head-toggle"
             role="button"
             tabIndex={0}
             aria-expanded={open}
-            onClick={handleToggle}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
@@ -140,7 +144,7 @@ export default function LatestTodos({ projects, reload }) {
           >
             <span className={`chevron${open ? " open" : ""}`}>▸</span>
             {open ? "Latest todos" : `Latest todos (${list.length})`}
-            <Help text="Add a todo to any project, and see the most recently added open todos across all projects, newest first. Order is a best guess (backlog files have no created date): most recently edited backlog first, and within a project the last-added first. Ideas are not listed or run here — they have their own flow." />
+            <Help text="Add a todo to any project, and see the most recently added open todos across all projects, newest first. Order is a best guess (backlog files have no created date): most recently edited backlog first, and within a project the last-added first. Ideas are not listed or run here — they have their own flow. Projects hidden by the Home filter are left out too." />
           </h3>
         </span>
         {chosen.length > 0 && open && (

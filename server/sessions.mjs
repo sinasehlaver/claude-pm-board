@@ -3,6 +3,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { SESSIONS_FILE, SESSION_INDEX_FILE } from "./paths.mjs";
 import { readBacklog, writeBacklog, emptyBacklog } from "./backlog.mjs";
+import { scaffoldProject } from "./scaffold.mjs";
 
 async function readJson(path, fallback) {
   try {
@@ -73,6 +74,15 @@ export async function sessionToTask(id, project) {
   const idx = await readIndex();
   idx[id] = { ...(idx[id] || {}), project, taskCreated: true };
   await writeIndex(idx);
+}
+
+// Scaffold a brand-new project, file the session to it, and seed a Todo from the session.
+export async function sessionToNewProject(id, name) {
+  const sess = (await readJson(SESSIONS_FILE, [])).find((s) => s.id === id);
+  if (!sess) throw new Error("no such session");
+  const slug = await scaffoldProject(name, { title: sess.title });
+  await sessionToTask(id, slug);
+  return slug;
 }
 
 export async function moveTask(fromSlug, id, toSlug) {
