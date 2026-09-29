@@ -9,6 +9,8 @@ import { PM_ROOT, PM_DIR } from "./paths.mjs";
 import { projectsRoot, listSessionFiles, tokenSum } from "./usage.mjs";
 
 export const DOCTOR_FILE = () => path.join(PM_DIR, "doctor.json");
+export const STATUS_FILE = () => path.join(PM_DIR, "doctor-status.json");
+export const FINDING_STATUSES = ["open", "fixing", "done", "dismissed"];
 const escapePath = (p) => p.replace(/[^a-zA-Z0-9]/g, "-");
 const BIG_READ_CHARS = 40_000; // ~10k tokens
 const BIG_RESULT_CHARS = 60_000;
@@ -301,8 +303,8 @@ function findings(agg, days) {
   return out;
 }
 
-export async function runDoctor({ days = Number(process.env.PM_DOCTOR_DAYS) || 14, now = Date.now() } = {}) {
-  const sinceMs = now - days * 24 * 3600e3;
+export async function runDoctor({ days = Number(process.env.PM_DOCTOR_DAYS) || 14, now = Date.now(), sinceMs: since } = {}) {
+  const sinceMs = since ?? now - days * 24 * 3600e3;
   const prefix = escapePath(PM_ROOT);
   const root = projectsRoot();
   const files = listSessionFiles()
@@ -353,6 +355,67 @@ export function readDoctor() {
   }
 }
 
+export function readStatuses() {
+  try {
+    const m = JSON.parse(fs.readFileSync(STATUS_FILE(), "utf8"));
+    return m && typeof m === "object" && !Array.isArray(m) ? m : {};
+  } catch {
+    return {};
+  }
+}
+
+// "open" clears the entry. Findings are matched by id (stable slug per rule), never by position.
+export const NOTE_MAX = 500;
+export function setStatus(id, status, now = Date.now(), note) {
+  if (!FINDING_STATUSES.includes(status)) throw new Error("bad status");
+  const m = readStatuses();
+  if (status === "open") delete m[id];
+  else {
+    const prev = m[id];
+    // `at` is the fix reference point for verify; only a real status change moves it.
+    const n = typeof note === "string" ? note.trim().slice(0, NOTE_MAX) : prev?.note;
+    m[id] = { status, at: prev?.status === status ? prev.at : new Date(now).toISOString(), ...(n ? { note: n } : {}), ...(prev?.verify && prev.status === status ? { verify: prev.verify } : {}) };
+  }
+  fs.mkdirSync(PM_DIR, { recursive: true });
+  fs.writeFileSync(STATUS_FILE(), JSON.stringify(m, null, 2));
+  return m;
+}
+
+// Doctor result with each finding's user-set status merged in.
+export function withStatuses(r) {
+  if (!r?.findings) return r;
+  const m = readStatuses();
+  return { ...r, findings: r.findings.map((f) => (m[f.id] ? { ...f, status: m[f.id].status, statusAt: m[f.id].at, note: m[f.id].note, verify: m[f.id].verify } : f)) };
+}
+
+// A fixing/done finding that a fresh scan no longer reports is confirmed fixed: drop its entry.
+// Dismissed stays until the user reopens it.
+function pruneStatuses(r) {
+  const m = readStatuses();
+  const ids = new Set(r.findings.map((f) => f.id));
+  let changed = false;
+  for (const [id, v] of Object.entries(m)) if (v.status !== "dismissed" && !ids.has(id)) (delete m[id], (changed = true));
+  if (changed) fs.writeFileSync(STATUS_FILE(), JSON.stringify(m, null, 2));
+}
+
+// Did the problem come back after the fix? Rescans only transcripts written since the fix was
+// recorded (not cached, not pruned). fixed = clean scan with activity; still = finding reappears;
+// no-data = nothing has run since, so nothing to judge.
+export async function verifyFinding(id, now = Date.now()) {
+  const entry = readStatuses()[id];
+  if (!entry || !["fixing", "done"].includes(entry.status)) throw Object.assign(new Error("mark the finding in progress or done first"), { code: 409 });
+  const r = await runDoctor({ now, sinceMs: Date.parse(entry.at) });
+  const hit = r.findings.find((f) => f.id === id);
+  const result = hit ? "still" : r.scope.sessions ? "fixed" : "no-data";
+  const verify = { at: new Date(now).toISOString(), result, sessions: r.scope.sessions };
+  const m = readStatuses();
+  if (m[id]) {
+    m[id].verify = verify;
+    fs.writeFileSync(STATUS_FILE(), JSON.stringify(m, null, 2));
+  }
+  return verify;
+}
+
 let running = null;
 // Fresh scan + cache write; concurrent callers share one in-flight scan.
 export function scanAndCache(opts) {
@@ -361,6 +424,7 @@ export function scanAndCache(opts) {
       .then((r) => {
         fs.mkdirSync(PM_DIR, { recursive: true });
         fs.writeFileSync(DOCTOR_FILE(), JSON.stringify(r, null, 2));
+        pruneStatuses(r);
         return r;
       })
       .finally(() => {

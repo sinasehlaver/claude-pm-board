@@ -18,15 +18,52 @@ function Evidence({ ev }) {
   );
 }
 
-function Finding({ f }) {
+const VERIFY_LABEL = { fixed: "✓ Not seen since the fix", still: "✗ Still happening after the fix", "no-data": "No sessions since the fix — run some work, then check again" };
+const STATUS_LABEL = { fixing: "in progress", done: "done", dismissed: "dismissed" };
+
+function Finding({ f, onStatus }) {
   const [open, setOpen] = useState(f.severity === "high");
   const [state, setState] = useState("idle");
   const [msg, setMsg] = useState("");
+  const [note, setNote] = useState(f.note || "");
+  const [checking, setChecking] = useState(false);
+  const tracked = f.status === "fixing" || f.status === "done";
+  const saveNote = async () => {
+    if (note.trim() === (f.note || "")) return;
+    setMsg("");
+    try {
+      await send("POST", `/doctor/findings/${encodeURIComponent(f.id)}/status`, { status: f.status, note });
+      onStatus(f.id, f.status, { note: note.trim() || undefined });
+    } catch (e) {
+      setMsg(e.message);
+    }
+  };
+  const verify = async () => {
+    setChecking(true);
+    setMsg("");
+    try {
+      const v = await send("POST", `/doctor/findings/${encodeURIComponent(f.id)}/verify`);
+      onStatus(f.id, f.status, { verify: { at: v.at, result: v.result, sessions: v.sessions } });
+    } catch (e) {
+      setMsg(e.message);
+    }
+    setChecking(false);
+  };
+  const mark = async (status) => {
+    setMsg("");
+    try {
+      await send("POST", `/doctor/findings/${encodeURIComponent(f.id)}/status`, { status });
+      onStatus(f.id, status);
+    } catch (e) {
+      setMsg(e.message);
+    }
+  };
   const fix = async () => {
     setState("busy");
     setMsg("");
     try {
       await send("POST", `/doctor/findings/${encodeURIComponent(f.id)}/fix`);
+      onStatus(f.id, f.status === "done" || f.status === "dismissed" ? f.status : "fixing");
       setState("done");
     } catch (e) {
       setState("idle");
@@ -34,19 +71,53 @@ function Finding({ f }) {
     }
   };
   return (
-    <li className={"doc-card sev-" + f.severity}>
+    <li className={"doc-card sev-" + f.severity + (f.status === "done" || f.status === "dismissed" ? " is-resolved" : "")}>
       <button className="doc-card-head" aria-expanded={open} onClick={() => setOpen(!open)}>
         <span className={"doc-sev sev-" + f.severity}>{f.severity}</span>
         <span className="doc-title">{f.title}</span>
+        {f.status && <span className={"doc-status st-" + f.status}>{STATUS_LABEL[f.status]}</span>}
         <span className="doc-target">{f.target}</span>
       </button>
       <p className="doc-suggest">{f.suggestion}</p>
+      {tracked && (
+        <div className="doc-fix">
+          <label className="doc-fix-label" htmlFor={"fixnote-" + f.id}>Fix</label>
+          <textarea
+            id={"fixnote-" + f.id}
+            className="doc-fix-note"
+            rows={2}
+            maxLength={500}
+            placeholder="What was changed to fix this?"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={saveNote}
+          />
+          {f.verify && (
+            <p className={"doc-verify vf-" + f.verify.result}>
+              {VERIFY_LABEL[f.verify.result]} · checked {new Date(f.verify.at).toLocaleString()} ({f.verify.sessions} session{f.verify.sessions === 1 ? "" : "s"} since the fix)
+            </p>
+          )}
+        </div>
+      )}
       {open && <Evidence ev={f.evidence} />}
       {f.severity !== "info" && (
         <div className="doc-actions">
           <button className="link" onClick={fix} disabled={state === "busy"} title="Opens a Claude Code session that asks you questions, then fixes it">
             {state === "busy" ? "Opening…" : state === "done" ? "Opened — again?" : "💬 Fix with Claude"}
           </button>
+          {tracked && (
+            <button className="link" onClick={verify} disabled={checking} title="Rescans only sessions after the fix was recorded">
+              {checking ? "Checking…" : f.verify ? "↻ Verify again" : "✓ Verify fix"}
+            </button>
+          )}
+          {f.status === "fixing" && (
+            <>
+              <button className="link" onClick={() => mark("done")}>✓ Mark done</button>
+              <button className="link" onClick={() => mark("dismissed")}>Dismiss</button>
+            </>
+          )}
+          {!f.status && <button className="link" onClick={() => mark("dismissed")}>Dismiss</button>}
+          {(f.status === "done" || f.status === "dismissed") && <button className="link" onClick={() => mark("open")}>Reopen</button>}
           {msg && <span className="doc-err">{msg}</span>}
         </div>
       )}
@@ -74,6 +145,14 @@ export default function Doctor({ onBack }) {
       setBusy(false);
     }
   };
+
+  const setFindingStatus = (id, status, extra) =>
+    setData((d) => ({
+      ...d,
+      findings: d.findings.map((x) =>
+        x.id !== id ? x : status === "open" ? { ...x, status: undefined, note: undefined, verify: undefined } : { ...x, status, ...(x.status === status ? extra : { verify: undefined, ...extra }) },
+      ),
+    }));
 
   const findings = data?.findings || [];
   return (
@@ -105,7 +184,7 @@ export default function Doctor({ onBack }) {
         )}
         <ul className="doc-list">
           {findings.map((f) => (
-            <Finding key={f.id} f={f} />
+            <Finding key={f.id} f={f} onStatus={setFindingStatus} />
           ))}
         </ul>
       </section>

@@ -73,3 +73,49 @@ test("fix route ignores client-supplied text; unknown/info/bad ids are refused",
   assert.equal((await fix("..%2F..%2Fetc")).status, 400);
   assert.equal((await fix("UPPER")).status, 400);
 });
+
+const status = (id, body) =>
+  fetch(`${B}/api/doctor/findings/${id}/status`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const listed = async () => (await (await fetch(B + "/api/doctor")).json()).findings;
+
+test("fix marks the finding in-progress; user then records done/dismissed/open", async () => {
+  await fix("large-reads");
+  assert.equal((await listed()).find((f) => f.id === "large-reads").status, "fixing");
+  assert.equal((await status("large-reads", { status: "done" })).status, 200);
+  assert.equal((await listed()).find((f) => f.id === "large-reads").status, "done");
+  await fix("large-reads"); // relaunching must not downgrade a done finding
+  assert.equal((await listed()).find((f) => f.id === "large-reads").status, "done");
+  assert.equal((await status("large-reads", { status: "open" })).status, 200);
+  assert.equal((await listed()).find((f) => f.id === "large-reads").status, undefined);
+});
+
+test("status route validates id, status and existence", async () => {
+  assert.equal((await status("large-reads", { status: "bogus" })).status, 400);
+  assert.equal((await status("large-reads", {})).status, 400);
+  assert.equal((await status("UPPER", { status: "done" })).status, 400);
+  assert.equal((await status("nope", { status: "done" })).status, 404);
+});
+
+test("note is stored, trimmed, capped and survives a same-status write", async () => {
+  await status("large-reads", { status: "fixing", note: "  use Grep first  " });
+  assert.equal((await listed()).find((f) => f.id === "large-reads").note, "use Grep first");
+  assert.equal((await status("large-reads", { status: "fixing", note: "x".repeat(501) })).status, 400);
+  assert.equal((await status("large-reads", { status: "fixing", note: 5 })).status, 400);
+});
+
+test("verify route validates id and requires a tracked finding", async () => {
+  const v = (id) => fetch(`${B}/api/doctor/findings/${id}/verify`, { method: "POST" });
+  assert.equal((await v("UPPER")).status, 400);
+  await status("large-reads", { status: "open" });
+  assert.equal((await v("large-reads")).status, 409);
+});
+
+test("verify reports no-data when no session ran since the fix, and stores it", async () => {
+  await status("large-reads", { status: "done" });
+  const r = await fetch(`${B}/api/doctor/findings/large-reads/verify`, { method: "POST" });
+  assert.equal(r.status, 200);
+  const j = await r.json();
+  assert.equal(j.result, "no-data");
+  assert.equal((await listed()).find((f) => f.id === "large-reads").verify.result, "no-data");
+  await status("large-reads", { status: "open" });
+});

@@ -12,7 +12,7 @@ import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForSecur
 import { listRelayJobs, relayDir, dismissRelay } from "./relay.mjs";
 import { latestTodos, resolveCrossItems } from "./todos.mjs";
 import { taskTokens } from "./tokens.mjs";
-import { readDoctor, scanAndCache, startDoctorTimer } from "./doctor.mjs";
+import { readDoctor, scanAndCache, startDoctorTimer, withStatuses, setStatus, verifyFinding, FINDING_STATUSES, NOTE_MAX } from "./doctor.mjs";
 import {
   burnSnapshot,
   burnBreakdown,
@@ -381,11 +381,11 @@ app.put("/api/usage/limits/:window", async (req, res, next) => {
 
 // --- doctor: LLM-free efficiency scan of transcripts (suggestions only) ---
 app.get("/api/doctor", (_req, res) => {
-  res.json(readDoctor() || { generatedAt: null, findings: [] });
+  res.json(withStatuses(readDoctor()) || { generatedAt: null, findings: [] });
 });
 app.post("/api/doctor/run", async (_req, res, next) => {
   try {
-    res.json(await scanAndCache());
+    res.json(withStatuses(await scanAndCache()));
   } catch (e) {
     next(e);
   }
@@ -400,8 +400,34 @@ app.post("/api/doctor/findings/:id/fix", async (req, res, next) => {
     const f = readDoctor()?.findings?.find((x) => x.id === id);
     if (!f) return res.status(404).json({ error: "finding not found — rescan" });
     if (f.severity === "info") return res.status(400).json({ error: "nothing to fix" });
-    res.json({ ok: true, ...(await launchClaude({ cwd: PM_ROOT, prompt: seedForDoctorFinding(f) })) });
+    const launched = await launchClaude({ cwd: PM_ROOT, prompt: seedForDoctorFinding(f) });
+    if (!["done", "dismissed"].includes(withStatuses(readDoctor()).findings.find((x) => x.id === id)?.status)) setStatus(id, "fixing");
+    res.json({ ok: true, ...launched });
   } catch (e) {
+    next(e);
+  }
+});
+// pm can't see how the launched session ended, so the user records the outcome:
+// fixing (set on launch) -> done | dismissed, or back to open. Finding must exist in the cached scan.
+app.post("/api/doctor/findings/:id/status", (req, res) => {
+  const { id } = req.params;
+  const status = req.body?.status;
+  if (!/^[a-z0-9-]{1,60}$/.test(id)) return res.status(400).json({ error: "bad finding id" });
+  if (typeof status !== "string" || !FINDING_STATUSES.includes(status)) return res.status(400).json({ error: "bad status" });
+  if (!readDoctor()?.findings?.some((x) => x.id === id)) return res.status(404).json({ error: "finding not found — rescan" });
+  const note = req.body?.note;
+  if (note !== undefined && (typeof note !== "string" || note.length > NOTE_MAX)) return res.status(400).json({ error: "bad note" });
+  setStatus(id, status, Date.now(), note);
+  res.json({ ok: true, id, status });
+});
+// Re-checks a fixing/done finding against transcripts written after the fix. No client text is used.
+app.post("/api/doctor/findings/:id/verify", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!/^[a-z0-9-]{1,60}$/.test(id)) return res.status(400).json({ error: "bad finding id" });
+    res.json({ ok: true, id, ...(await verifyFinding(id)) });
+  } catch (e) {
+    if (e.code === 409) return res.status(409).json({ error: e.message });
     next(e);
   }
 });

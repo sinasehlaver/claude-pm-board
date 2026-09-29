@@ -200,6 +200,15 @@ seeded with the finding, which investigates read-only, then interviews you with
 `AskUserQuestion` about root cause and fix options before changing anything. Same launch
 guard as the other build buttons (loopback or `PM_TOKEN`); macOS terminal launch (see above).
 
+pm can't see how that session ends, so the finding is tracked by you: launching marks it
+**in progress**, then **✓ Mark done**, **Dismiss**, or **Reopen**. A finding still in progress
+or done that a later scan no longer reports is dropped from the tracker (confirmed fixed);
+dismissed ones stay until reopened. Stored in `.claude/pm/doctor-status.json`.
+
+In-progress and done findings show a **Fix** note field (what you changed) and a
+**✓ Verify fix** button. Verify rescans only sessions written *after* the fix was recorded:
+*not seen since the fix*, *still happening*, or *no sessions since* (nothing to judge yet).
+
 Runs every `PM_DOCTOR_INTERVAL_MIN` minutes (default 360, `0` = off) and on **Scan now**;
 result cached in `.claude/pm/doctor.json`. `PM_DOCTOR_DAYS` (default 14) sets the window.
 

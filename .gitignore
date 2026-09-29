@@ -5,3 +5,9 @@ web/dist/
 .DS_Store
 .env
 .env.local
+.env.*
+*.pem
+*.key
+.claude/
+dist/
+coverage/
