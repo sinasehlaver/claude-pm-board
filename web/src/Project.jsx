@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ago, send } from "./api";
 import Help from "./Help.jsx";
+import TokBadge, { useTaskTokens } from "./TokBadge.jsx";
 import { UnattendedToggle, loadUnattended } from "./relay.jsx";
 
 const STATES = ["Doing", "Todo", "Blocked", "Done"];
@@ -11,6 +12,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
   const [showStatus, setShowStatus] = useState(false);
   const [doneOpen, setDoneOpen] = useState(false);
   const [unattended, setUnattended] = useState(loadUnattended);
+  const tokens = useTaskTokens(data);
 
   if (!data)
     return (
@@ -52,6 +54,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
     act(async () => {
       await send("POST", `/projects/${slug}/tasks/run-seq`, { unattended });
     });
+  const securityAudit = () => act(() => send("POST", `/projects/${slug}/security-audit`));
   const moveTask = (id) => {
     const to = prompt(`Move to which project?\n${moveTargets.join(", ")}`);
     if (to && moveTargets.includes(to))
@@ -89,6 +92,20 @@ export default function Project({ slug, data, projects, onBack, reload }) {
             setEditing(false);
           }}
         />
+      )}
+
+      {slug !== "ideas" && (
+        <section className="block">
+          <div className="block-head">
+            <span className="block-head-title">
+              <h2>Security</h2>
+              <Help text="Launches a Claude Code session that audits this project against a catalogue of common breach classes (secrets, authz, injection, SSRF, path traversal, exposed ports, LLM-agent flaws, supply chain…), writes security tests into the project's own suite, and files findings as backlog todos plus a report in knowledge/security/." />
+            </span>
+            <button className="link" onClick={securityAudit} title="static audit + generated security tests">
+              🛡 Security audit
+            </button>
+          </div>
+        </section>
       )}
 
       <section className="block">
@@ -144,6 +161,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
                   <Task
                     key={t.id}
                     t={t}
+                    rec={tokens[slug]?.[t.title]}
                     onEdit={editTask}
                     onDel={delTask}
                     onBuild={buildTask}
@@ -343,7 +361,7 @@ function AddRow({ onAdd }) {
   );
 }
 
-function Task({ t, onEdit, onDel, onBuild, onMove }) {
+function Task({ t, rec, onEdit, onDel, onBuild, onMove }) {
   return (
     <div className="task">
       <div className="task-main">
@@ -356,6 +374,7 @@ function Task({ t, onEdit, onDel, onBuild, onMove }) {
         >
           {t.title}
         </button>
+        <TokBadge rec={rec} />
         <button className="build" title="build with Claude" onClick={() => onBuild(t.id)}>
           ▶
         </button>

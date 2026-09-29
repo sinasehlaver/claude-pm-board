@@ -4,6 +4,7 @@ import Home from "./Home.jsx";
 import Project from "./Project.jsx";
 import Sessions from "./Sessions.jsx";
 import Usage from "./Usage.jsx";
+import Doctor from "./Doctor.jsx";
 import Help from "./Help.jsx";
 
 const THEME_KEY = "pm.theme";
@@ -38,18 +39,21 @@ function ThemeToggle() {
 //   "/"               -> home
 //   "/sessions"        -> sessions
 //   "/usage"           -> usage
+//   "/doctor"          -> doctor
 //   "/project/<slug>"  -> project view for slug
 function parsePath(pathname) {
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] === "project" && parts[1]) return { view: "home", sel: decodeURIComponent(parts[1]) };
   if (parts[0] === "sessions") return { view: "sessions", sel: null };
   if (parts[0] === "usage") return { view: "usage", sel: null };
+  if (parts[0] === "doctor") return { view: "doctor", sel: null };
   return { view: "home", sel: null };
 }
 function pathFor(view, sel) {
   if (sel) return "/project/" + encodeURIComponent(sel);
   if (view === "sessions") return "/sessions";
   if (view === "usage") return "/usage";
+  if (view === "doctor") return "/doctor";
   return "/";
 }
 
@@ -126,6 +130,8 @@ export default function App() {
     />
   ) : view === "usage" ? (
     <Usage onBack={() => setView("home")} />
+  ) : view === "doctor" ? (
+    <Doctor onBack={() => setView("home")} />
   ) : (
     <Home
       projects={projects}
@@ -133,6 +139,7 @@ export default function App() {
       onOpen={setSel}
       onSessions={() => setView("sessions")}
       onUsage={() => setView("usage")}
+      onDoctor={() => setView("doctor")}
       reload={loadList}
     />
   );

@@ -71,7 +71,7 @@ Everything lives under `$PM_ROOT/.claude/`:
 | `backlog/<slug>.md` | Task list. `## Doing/Todo/Blocked/Done` sections, one `- ` bullet per task |
 | `rules/<slug>.md` | Constraints a launched session reads first. Not rendered by the board |
 | `handoffs/*.md` | Session handoff notes, shown in the activity timeline |
-| `pm/activity.json`, `pm/sessions.json` | Generated — never hand-edit |
+| `pm/activity.json`, `pm/sessions.json`, `pm/doctor.json` | Generated — never hand-edit |
 | `pm/session-index.json` | Your map of session id → project |
 | `pm/relay/` | Live status of unattended runs (pruned after 14 days) |
 
@@ -107,14 +107,23 @@ sessions.
 Opens a fresh `claude` session with that task's title and note, told to read
 `rules/<slug>.md` and `state/<slug>.md` first, then update the backlog when finished.
 
+### Security audit (🛡)
+
+Each project page has a **Security audit** button (macOS-only, like the other launch
+buttons). It opens a `claude` session running the workspace `security-guard` skill: a
+static review against a catalogue of common breach classes, security tests written into
+the project's own suite, a report in `knowledge/security/<slug>.md`, and one backlog todo
+per confirmed finding. No live probing. Build prompts also carry a one-line
+secure-by-default reminder.
+
 ### Batches (▶▶ Run @seq)
 
 1. Tap **@seq** on the todos you want in the batch.
 2. Tap **▶▶ Run @seq (N)** next to the Backlog heading. With nothing flagged it reads
    **▶▶ Run all (N)** and runs every Todo + Doing task instead.
 3. One orchestrator session starts in the project directory. It orders the batch by
-   dependency, fans independent todos out to parallel subagents, and paces itself against
-   your burn rate. Finished todos move to **Done** and you watch them land on the board.
+   dependency and fans independent todos out to parallel subagents (≤3 at a time).
+   Finished todos move to **Done** and you watch them land on the board.
 
 Home's **Latest todos** panel does the same across projects: tick todos (or none for all
 listed) and press **▶▶ Run selected**.
@@ -167,6 +176,33 @@ rolling 1h / 5h / 7d token totals, rate-limit ceiling from
 `~/.claude/vscode-claude-status-cache.json` (flagged stale after ~15 min), a 14-day
 chart, and per-model totals. Cost is an estimate from `web/src/pricing.js`, not a bill.
 
+### Tokens per todo
+
+Todos launched from pm (▶, Run @seq / Run all, Home cross-project run, unattended relay)
+show a small `1.2M tok` badge with the tokens their session spent (subagents included).
+pm tags each seed prompt with a `pm-run: <id>` line and later matches it in the
+transcripts. A batch's total is split evenly across its todos (shown as `~`, an
+estimate). Totals live in the generated `.claude/pm/task-tokens.json` and are matched
+by title, so renaming a todo starts a new count. Sessions not launched by pm, or started
+before this feature, are not counted.
+
+### Doctor
+
+Home → **Doctor**. A no-LLM scan of this workspace's Claude Code transcripts
+(`~/.claude/projects/<escaped PM_ROOT>*`, subagents included) that reports where errors
+happened (failed/repeated tool calls, permission denials, API/rate-limit errors), what
+burned the most tokens (top sessions and tools, whole-file Reads, cache-miss turns, subagent
+fan-out, long sessions never compacted), and a suggested fix per finding (CLAUDE.md rule,
+memory, settings allowlist, …). Suggestions only — the scan never edits anything.
+
+Each finding has a **💬 Fix with Claude** button: it opens a terminal Claude Code session
+seeded with the finding, which investigates read-only, then interviews you with
+`AskUserQuestion` about root cause and fix options before changing anything. Same launch
+guard as the other build buttons (loopback or `PM_TOKEN`); macOS terminal launch (see above).
+
+Runs every `PM_DOCTOR_INTERVAL_MIN` minutes (default 360, `0` = off) and on **Scan now**;
+result cached in `.claude/pm/doctor.json`. `PM_DOCTOR_DAYS` (default 14) sets the window.
+
 ### Continuous (optional)
 
 If a `continuous/` project sits next to `pm/`, a **Continuous** tab shows and controls its
@@ -182,6 +218,7 @@ All optional, via environment variables:
 | `PM_ROOT` | parent of this package | Workspace root that owns `.claude/` |
 | `PM_PORT` / `PORT` | `4500` | Server port |
 | `PM_TOKEN` | unset | Shared secret for launch routes (`?token=` or `x-pm-token`). Needed to launch from a phone |
+| `PM_DOCTOR_INTERVAL_MIN` / `PM_DOCTOR_DAYS` | `360` / `14` | Doctor scan period (0 = off) and look-back window |
 | `PM_RELAY_*` | see above | Unattended relay tunables (macOS only) |
 | `CONTINUOUS_ROOT` | `$PM_ROOT/continuous` | Location of the optional runner |
 

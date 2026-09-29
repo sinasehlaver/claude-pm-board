@@ -16,6 +16,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, statSy
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseBacklog } from "./backlog.mjs";
+import { markPrompt } from "./tokens.mjs";
 
 export const relayDir = (root) => join(root, ".claude", "pm", "relay");
 
@@ -354,7 +355,9 @@ export async function runRelay(specPath, env = process.env) {
   };
 
   const c = { limitHits: 0, errors: 0, nudges: 0 };
-  let prompt = spec.prompt;
+  // spec.track = launched by pm: tag the first prompt so its tokens can be attributed to the todos
+  const firstPrompt = spec.track ? markPrompt(spec.prompt, spec.id) : spec.prompt;
+  let prompt = firstPrompt;
   let resumeId = null;
   let open = openTasks(spec.root, spec.tasks);
   log(`started: ${spec.tasks.length} todo(s) — ${spec.label}`);
@@ -418,7 +421,7 @@ export async function runRelay(specPath, env = process.env) {
     } else {
       prompt = continuePrompt({ reason: "nudge", open });
     }
-    if (!resumeId) prompt = spec.prompt; // died before a session existed: start over
+    if (!resumeId) prompt = firstPrompt; // died before a session existed: start over
   }
 }
 

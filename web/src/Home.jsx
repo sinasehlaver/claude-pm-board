@@ -28,7 +28,7 @@ function loadHidden() {
   }
 }
 
-export default function Home({ projects, inboxCount, onOpen, onSessions, onUsage, reload }) {
+export default function Home({ projects, inboxCount, onOpen, onSessions, onUsage, onDoctor, reload }) {
   const [idea, setIdea] = useState("");
   const [hidden, setHidden] = useState(loadHidden);
   const [showFilter, setShowFilter] = useState(false);
@@ -105,6 +105,12 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onUsage
               Usage
             </button>
             <Help text="Token/cost burn rate across every Claude Code session on this machine, and your account's rate-limit ceiling." />
+          </span>
+          <span className="bar-item">
+            <button className="link" onClick={onDoctor}>
+              Doctor
+            </button>
+            <Help text="Routine, LLM-free scan of Claude Code transcripts: where errors and token spend concentrate, plus suggested fixes (suggestions only)." />
           </span>
           <span className="bar-item">
             <button className="link" onClick={onSessions}>

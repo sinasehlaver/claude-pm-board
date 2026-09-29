@@ -8,15 +8,16 @@ import { listProjects, getProject } from "./projects.mjs";
 import { readState, writeState } from "./state.mjs";
 import { readBacklog, writeBacklog, emptyBacklog, runnableTasks } from "./backlog.mjs";
 import { listSessions, fileSession, sessionToTask, sessionToNewProject, moveTask } from "./sessions.mjs";
-import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, launchClaude, launchRelay } from "./launch.mjs";
+import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForSecurityAudit, seedForDoctorFinding, launchClaude, launchRelay } from "./launch.mjs";
 import { listRelayJobs, relayDir, dismissRelay } from "./relay.mjs";
 import { latestTodos, resolveCrossItems } from "./todos.mjs";
+import { taskTokens } from "./tokens.mjs";
+import { readDoctor, scanAndCache, startDoctorTimer } from "./doctor.mjs";
 import {
   burnSnapshot,
   burnBreakdown,
   summary,
   accountRateLimitStatus,
-  checkPreLaunchUtilization,
   paceBreakdown,
   PACE_WINDOW_MS,
   writeUsageLimitsWindow,
@@ -224,6 +225,20 @@ app.post("/api/projects/:slug/tasks/:id/launch", async (req, res, next) => {
     if (!t) return res.status(404).json({ error: "no such task" });
     const dir = join(PM_ROOT, slug);
     const prompt = seedForTask({ slug, title: t.title, note: t.note, adhoc: !existsSync(dir) });
+    res.json({ ok: true, ...(await launchClaude({ cwd: dir, prompt, todos: [{ slug, title: t.title }] })) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Security audit: interactive session running the workspace security-guard skill.
+app.post("/api/projects/:slug/security-audit", async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug) || slug === "ideas") return res.status(400).json({ error: "bad slug" });
+    if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
+    const dir = join(PM_ROOT, slug);
+    const prompt = seedForSecurityAudit({ slug, adhoc: !existsSync(dir) });
     res.json({ ok: true, ...(await launchClaude({ cwd: dir, prompt })) });
   } catch (e) {
     next(e);
@@ -244,11 +259,10 @@ app.post("/api/projects/:slug/tasks/run-seq", async (req, res, next) => {
     if (!tasks.length) return res.status(400).json({ error: "no runnable todos" });
     const dir = join(PM_ROOT, slug);
     const relay = unattended(req);
-    const prelaunchUtilization = await checkPreLaunchUtilization();
-    const prompt = seedForSequentialRun({ slug, tasks, adhoc: !existsSync(dir), mode, relay, prelaunchUtilization });
+    const prompt = seedForSequentialRun({ slug, tasks, adhoc: !existsSync(dir), mode, relay });
     const launched = relay
       ? await launchRelay({ cwd: dir, prompt, label: `${slug} (${tasks.length})`, tasks: tasks.map((t) => ({ slug, title: t.title })) })
-      : await launchClaude({ cwd: dir, prompt });
+      : await launchClaude({ cwd: dir, prompt, todos: tasks.map((t) => ({ slug, title: t.title })) });
     res.json({ ok: true, mode, count: tasks.length, ...launched });
   } catch (e) {
     next(e);
@@ -280,13 +294,22 @@ app.post("/api/tasks/run-cross", async (req, res, next) => {
       return res.status(409).json({ error: "todos changed — refresh and pick again", stale });
     if (!tasks.length) return res.status(400).json({ error: "no runnable todos (ideas are excluded)" });
     const relay = unattended(req);
-    const prelaunchUtilization = await checkPreLaunchUtilization();
-    const prompt = seedForCrossProjectRun({ tasks, relay, prelaunchUtilization });
+    const prompt = seedForCrossProjectRun({ tasks, relay });
     const projects = new Set(tasks.map((t) => t.slug)).size;
     const launched = relay
       ? await launchRelay({ cwd: PM_ROOT, prompt, label: `${tasks.length} todo(s) / ${projects} project(s)`, tasks })
-      : await launchClaude({ cwd: PM_ROOT, prompt });
+      : await launchClaude({ cwd: PM_ROOT, prompt, todos: tasks.map((t) => ({ slug: t.slug, title: t.title })) });
     res.json({ ok: true, count: tasks.length, projects, skipped: skipped.length, ...launched });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Per-todo token totals: { slug: { title: { tokens, sessions, split, updatedAt } } }
+// (generated sidecar, see server/tokens.mjs).
+app.get("/api/tasks/tokens", async (_req, res, next) => {
+  try {
+    res.json(await taskTokens());
   } catch (e) {
     next(e);
   }
@@ -355,6 +378,34 @@ app.put("/api/usage/limits/:window", async (req, res, next) => {
     res.status(400).json({ error: e.message });
   }
 });
+
+// --- doctor: LLM-free efficiency scan of transcripts (suggestions only) ---
+app.get("/api/doctor", (_req, res) => {
+  res.json(readDoctor() || { generatedAt: null, findings: [] });
+});
+app.post("/api/doctor/run", async (_req, res, next) => {
+  try {
+    res.json(await scanAndCache());
+  } catch (e) {
+    next(e);
+  }
+});
+// "Fix with Claude": the finding is looked up server-side by id in the cached scan, so the
+// client can't inject prompt text. Launch-guarded like the other seed routes.
+app.post("/api/doctor/findings/:id/fix", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!/^[a-z0-9-]{1,60}$/.test(id)) return res.status(400).json({ error: "bad finding id" });
+    if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
+    const f = readDoctor()?.findings?.find((x) => x.id === id);
+    if (!f) return res.status(404).json({ error: "finding not found — rescan" });
+    if (f.severity === "info") return res.status(400).json({ error: "nothing to fix" });
+    res.json({ ok: true, ...(await launchClaude({ cwd: PM_ROOT, prompt: seedForDoctorFinding(f) })) });
+  } catch (e) {
+    next(e);
+  }
+});
+startDoctorTimer();
 
 // --- live updates: fs.watch on the three dirs/files -> SSE ping -----------
 const clients = new Set();

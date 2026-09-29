@@ -589,3 +589,48 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 }
 @keyframes lt-notice-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .lt-notice { animation: none; } }
+
+/* per-todo token badge */
+.tokbadge {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap;
+  padding: 1px 7px; border-radius: 999px; color: var(--muted); background: var(--surface2);
+  border: 1px solid var(--line); cursor: default;
+  transition: color 0.16s var(--ease), border-color 0.16s var(--ease), background-color 0.16s var(--ease);
+}
+.tokbadge:hover { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-tint); }
+
+/* doctor */
+.doc-list { list-style: none; margin: 0; padding: 0 12px 12px; display: grid; gap: 10px; }
+.doc-card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow-sm); padding: 4px 14px 12px;
+  transition: box-shadow 0.16s var(--ease), border-color 0.16s var(--ease);
+}
+.doc-card:hover { box-shadow: var(--shadow-md); border-color: color-mix(in srgb, var(--line) 50%, var(--accent)); }
+.doc-card-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 0 6px; border: 0; background: none;
+  color: var(--text); text-align: left; cursor: pointer; font: inherit; border-radius: var(--radius-xs);
+}
+.doc-card-head:focus-visible { outline: none; box-shadow: var(--ring); }
+.doc-title { flex: 1; font-family: var(--font-display); font-weight: 600; font-size: 15px; letter-spacing: -0.005em; }
+.doc-sev, .doc-target {
+  font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted);
+}
+.doc-sev.sev-high { color: var(--bad); background: var(--bad-tint); border-color: transparent; }
+.doc-sev.sev-medium { color: var(--accent-ink); background: var(--accent-tint); border-color: transparent; }
+.doc-target { text-transform: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.doc-suggest { margin: 0 0 4px; font-size: 14px; line-height: 1.45; }
+.doc-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.doc-actions .doc-err { padding: 0; font-size: 13px; }
+.doc-ev { margin: 8px 0 0; display: grid; gap: 4px; font-size: 12.5px; }
+.doc-ev > div { display: flex; gap: 10px; }
+.doc-ev dt { color: var(--muted); min-width: 92px; }
+.doc-ev dd { margin: 0; word-break: break-word; }
+.doc-err { color: var(--bad); padding: 0 16px; }
+.doc-empty, .doc-sum { padding: 0 16px; margin: 4px 0 10px; }
+.doc-table { width: calc(100% - 24px); margin: 0 12px 12px; border-collapse: collapse; font-size: 13px; }
+.doc-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.doc-table td { padding: 7px 8px; border-bottom: 1px solid var(--line); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-table tbody tr { transition: background-color 0.14s var(--ease); }
+.doc-table tbody tr:hover { background: var(--accent-tint); }

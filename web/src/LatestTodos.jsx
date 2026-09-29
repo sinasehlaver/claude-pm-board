@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { get, onStream, send } from "./api";
 import Help from "./Help.jsx";
+import TokBadge, { useTaskTokens } from "./TokBadge.jsx";
 import { UnattendedToggle, launchNotice, loadUnattended } from "./relay.jsx";
 
 const PROJECT_KEY = "pm.addTodoProject";
@@ -14,6 +15,7 @@ const keyOf = (t) => `${t.slug}\u0000${t.title}`;
 // across all projects (newest first), selectable for one cross-project run.
 export default function LatestTodos({ projects, reload, hidden = [] }) {
   const [todos, setTodos] = useState(null);
+  const tokens = useTaskTokens(todos);
   const [picked, setPicked] = useState(() => new Set());
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState(() => localStorage.getItem(PROJECT_KEY) || "");
@@ -200,6 +202,7 @@ export default function LatestTodos({ projects, reload, hidden = [] }) {
                           <span className="lt-slug">{t.slug}</span>
                           {t.state === "Doing" && <span className="lt-state">doing</span>}
                           {t.priority ? <span className={`lt-pri p${t.priority}`}>p{t.priority}</span> : null}
+                          <TokBadge rec={tokens[t.slug]?.[t.title]} />
                         </span>
                       </span>
                     </label>

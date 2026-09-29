@@ -16,7 +16,7 @@ import readline from "node:readline";
 // Overridable for tests only — real usage is always the actual account-wide log dir.
 // Read via env lookup (not a frozen module-level const) so tests can point at a
 // different fixture file per-test without re-importing the module.
-const projectsRoot = () => process.env.CLAUDE_PROJECTS_ROOT || path.join(os.homedir(), ".claude", "projects");
+export const projectsRoot = () => process.env.CLAUDE_PROJECTS_ROOT || path.join(os.homedir(), ".claude", "projects");
 const statusCachePath = () =>
   process.env.CLAUDE_STATUS_CACHE || path.join(os.homedir(), ".claude", "vscode-claude-status-cache.json");
 const usageLimitsPath = () =>
@@ -537,20 +537,5 @@ export function rateLimitStatus() {
   };
 }
 
-// Check if utilization is already high before starting a batch run.
-// Mirrors the relay's soft-stop thresholds (PM_RELAY_STOP_5H=0.95, PM_RELAY_STOP_7D=0.97).
-// Returns null if launch is safe, or { window, utilization, resetAt } if too high.
-export async function checkPreLaunchUtilization(thresholds = { "5h": 0.95, "7d": 0.97 }) {
-  try {
-    const status = await accountRateLimitStatus();
-    for (const [windowKey, threshold] of Object.entries(thresholds)) {
-      const entry = status.windows?.[windowKey];
-      if (entry?.available && entry.utilization != null && entry.utilization >= threshold * 100) {
-        return { window: windowKey, utilization: entry.utilization, resetAt: entry.resetAt };
-      }
-    }
-  } catch {
-    // On error, allow launch to proceed (don't block on usage check failure)
-  }
-  return null;
-}
+// Shared with server/tokens.mjs (per-todo token attribution).
+export { listSessionFiles, parseFileCached, tokenSum };

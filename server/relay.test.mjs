@@ -122,9 +122,10 @@ test("relay seeds: unattended pacing replaces the stop-and-exit pacing", () => {
     assert.match(s, /UNATTENDED RUN/);
     assert.match(s, /resumes this SAME session/);
     assert.match(s, /do NOT stop early/i);
-    assert.doesNotMatch(s, /a human will/);
+    assert.doesNotMatch(s, /ONE-SHOT SESSION/);
+    assert.doesNotMatch(s, /localhost:4310|vscode-claude-status-cache/);
   }
-  assert.match(seedForSequentialRun({ slug: "hub", tasks }), /a human will/); // interactive path unchanged
+  assert.match(seedForSequentialRun({ slug: "hub", tasks }), /ONE-SHOT SESSION/);
 });
 
 test("launchRelay (dryrun): writes a spec and builds a caffeinate + node relay-cli command", async () => {
