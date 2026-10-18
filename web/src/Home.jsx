@@ -167,6 +167,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
           </span>
           {p.blocked && <span className="dot" title="blocked" />}
         </div>
+        {p.description && <div className="desc clamp">{p.description}</div>}
         <div className="status clamp">{p.status || <em className="muted">no status</em>}</div>
         {p.lastResult && (
           <div className="card-line">

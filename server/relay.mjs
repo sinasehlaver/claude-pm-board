@@ -10,9 +10,9 @@
 //   status "rejected" => hard stop with a real reset time. Utilization above the
 //   soft threshold => stop the child ourselves and wait, rather than hit the wall
 //   mid tool-call.
-import { spawn, execFile } from "node:child_process";
+import { spawn, execFile, execFileSync } from "node:child_process";
 import { createInterface } from "node:readline";
-import { mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseBacklog } from "./backlog.mjs";
@@ -237,6 +237,37 @@ export function dismissRelay(root, id) {
   return true;
 }
 
+const JOB_ID_RE = /^\d{14}-[a-f0-9]{6}$/;
+
+// SIGTERM a live relay job (the loop treats it as "stopped by user"). The id is
+// shape-checked, and the pid from the job file is only signalled if it is alive and
+// its command line is a relay-cli — a recycled pid must never get killed.
+export function stopRelay(root, id, { isRelayPid = relayPidCheck } = {}) {
+  if (!JOB_ID_RE.test(String(id))) return false;
+  let job;
+  try {
+    job = JSON.parse(readFileSync(join(relayDir(root), `${id}.job.json`), "utf8"));
+  } catch {
+    return false;
+  }
+  if (!(job.status === "running" || job.status === "waiting")) return false;
+  if (!Number.isInteger(job.pid) || job.pid <= 1 || !pidAlive(job.pid) || !isRelayPid(job.pid)) return false;
+  try {
+    process.kill(job.pid, "SIGTERM");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function relayPidCheck(pid) {
+  try {
+    return /relay-cli/.test(execFileSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" }));
+  } catch {
+    return false;
+  }
+}
+
 // ---------- the loop -------------------------------------------------------
 
 function alert(cfg, title, message) {
@@ -248,6 +279,10 @@ function alert(cfg, title, message) {
 
 const say = (msg) => console.log(`[relay ${new Date().toLocaleTimeString([], { hour12: false })}] ${msg}`);
 
+export const QUIET_NOTE =
+  "Unattended run: nobody reads your text between tool calls, so write none. " +
+  "Final message <=8 lines: what shipped, what's left, what wasn't verified.";
+
 // One child run. Resolves { st, softStopped } once claude has exited.
 function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
   const args = [
@@ -257,7 +292,12 @@ function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
     "--permission-mode", "acceptEdits",
     "--disallowed-tools", "Bash(git *)",
     "--allowed-tools", `Bash(node ${BACKLOG_CLI} *)`,
+    // Measured 2026-10-09: first-turn context 22.8k -> 14.4k. Relay runs are build todos (ideas
+    // are refused), so no MCP connectors; the skill list (~6k) is dropped unless a todo names one.
+    "--strict-mcp-config",
+    "--append-system-prompt", QUIET_NOTE,
   ];
+  if (!/skill/i.test(spec.prompt || "")) args.push("--disable-slash-commands");
   args.push(...settingsArgs());
   if (spec.modelArg) args.push("--model", spec.modelArg);
   if (resumeId) args.push("--resume", resumeId);
@@ -299,14 +339,63 @@ function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
   });
 }
 
+const clip = (s, n) => {
+  const t = String(s ?? "").replace(/\s+/g, " ").trim();
+  return t.length > n ? `${t.slice(0, n - 1)}…` : t;
+};
+// Job status is served unauthenticated, so never surface obvious credentials.
+const redact = (s) => s.replace(/((?:token|key|secret|passw(?:or)?d|auth\w*)\s*[=:]\s*)\S+/gi, "$1***");
+
+// "Read server/launch.mjs", "Bash: npm test", "Task: fix the parser" — the tool + its target.
+export function describeTool(name, input = {}) {
+  const i = input && typeof input === "object" ? input : {};
+  const short = (p) => clip(String(p ?? "").replace(/^.*\/(?=[^/]+\/[^/]+$)/, "…/"), 70);
+  let detail = "";
+  switch (name) {
+    case "Read":
+    case "Edit":
+    case "Write":
+    case "NotebookEdit":
+      detail = short(i.file_path || i.notebook_path);
+      break;
+    case "Bash":
+      detail = clip(i.description || i.command, 90);
+      break;
+    case "Grep":
+    case "Glob":
+      detail = clip(i.pattern, 60);
+      break;
+    case "Task":
+    case "Agent":
+      detail = clip(i.description || i.subagent_type, 80);
+      break;
+    case "WebFetch":
+      detail = clip(i.url, 80);
+      break;
+    case "WebSearch":
+      detail = clip(i.query, 80);
+      break;
+    default:
+      detail = "";
+  }
+  return redact(detail ? `${name}: ${detail}` : name);
+}
+
+// Assistant event -> [{ text, sub }] (what it said / which tools it called).
+export function describeEvent(ev) {
+  if (!ev || ev.type !== "assistant") return [];
+  const sub = Boolean(ev.parent_tool_use_id);
+  const out = [];
+  for (const b of ev.message?.content || []) {
+    if (b.type === "text" && b.text?.trim()) out.push({ text: redact(clip(b.text, 160)), sub, kind: "say" });
+    else if (b.type === "tool_use") out.push({ text: describeTool(b.name, b.input), sub, kind: "tool" });
+  }
+  return out;
+}
+
 // One-line terminal echo of what the agent is doing.
 function echo(ev) {
-  if (ev.type !== "assistant") return;
-  const tag = ev.parent_tool_use_id ? "  ↳ " : "";
-  for (const b of ev.message?.content || []) {
-    if (b.type === "text" && b.text.trim()) say(`${tag}${b.text.trim().replace(/\s+/g, " ").slice(0, 160)}`);
-    else if (b.type === "tool_use") say(`${tag}· ${b.name}`);
-  }
+  for (const a of describeEvent(ev)) say(`${a.sub ? "  ↳ " : ""}${a.kind === "tool" ? "· " : ""}${a.text}`);
 }
 
 async function sleepUntil(ms, cfg, beat, halted) {
@@ -356,6 +445,7 @@ export async function runRelay(specPath, env = process.env) {
     return job;
   };
 
+  let lastSave = 0;
   const c = { limitHits: 0, errors: 0, nudges: 0 };
   // spec.track = launched by pm: tag the first prompt so its tokens can be attributed to the todos
   const firstPrompt = spec.track ? markPrompt(spec.prompt, spec.id) : spec.prompt;
@@ -391,7 +481,16 @@ export async function runRelay(specPath, env = process.env) {
       spec,
       prompt,
       resumeId,
-      onEvent: echo,
+      onEvent: (ev) => {
+        echo(ev);
+        const acts = describeEvent(ev);
+        if (!acts.length) return;
+        job.activity = [...(job.activity || []), ...acts.map((a) => ({ at: Date.now(), ...a }))].slice(-8);
+        if (Date.now() - lastSave > 1000) {
+          lastSave = Date.now();
+          save();
+        }
+      },
       onChild: (ch) => (current = ch),
       note: log,
     });

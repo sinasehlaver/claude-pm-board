@@ -12,8 +12,8 @@ and let them run unattended.
 
 ## Features
 
-- **Project board** — one card per project with status, open-task count, last activity,
-  and a blocked marker. Search, sort (blocked first / recent / stalest / A–Z) and Filter; a
+- **Project board** — one card per project with a one-line description (the first paragraph of the project's `README.md`),
+  status, open-task count, last activity, and a blocked marker. Search, sort (blocked first / recent / stalest / A–Z) and Filter; a
   "stale" badge after 7 idle days; a color per project (swatches on the project page, stored in
   your browser); light/dark theme. Two tabs: **Projects** (benchmark/tool entries from
   `entries.json` sit in a collapsed group) and **Tools** (Env Manager). Sessions, Doctor and
@@ -203,7 +203,8 @@ buttons). It opens a `claude` session running the workspace `security-guard` ski
 static review against a catalogue of common breach classes, security tests written into
 the project's own suite, a report in `knowledge/security/<slug>.md`, and one backlog todo
 per confirmed finding. No live probing. Build prompts also carry a one-line
-secure-by-default reminder.
+secure-by-default reminder and a port note: pick dev-server ports from a local port
+registry (`.claude/ports.md`, if your workspace has one) so projects don't collide.
 
 ### Batches (▶▶ Run @seq)
 
@@ -226,11 +227,20 @@ headless (`claude -p`, `acceptEdits`, `Bash(git *)` denied) and:
   reset (+90 s), then resumes the same session;
 - decides what's left by re-reading the backlog and matching todos **by title**, and
   nudges a stalled agent a few times before reporting **stalled**;
+- shows the agent's latest actions (file read/edited, command, subagent task) on the running row;
 - shows progress as a strip on Home (running / waiting / done / stalled / failed), with
   ✕ to dismiss finished rows;
 - edits backlog and state through one allowlisted helper, `server/backlog-cli.mjs`,
   because headless Claude Code cannot edit anything under `.claude/`. So an unattended
   run can't hand-edit `rules/*.md` or promote ideas — use the interactive path for those.
+- starts lean: no MCP servers, no skill list unless a todo mentions a skill (`--strict-mcp-config --disable-slash-commands`,
+  first turn ~14k tokens instead of ~23k), and a system-prompt line asking for no
+  narration and a ≤8-line final report.
+
+Every launch (relay and interactive) passes `--settings $PM_ROOT/.claude/settings.json`
+when that file exists, so the workspace hooks and env apply even though the session runs
+in a project folder. Hook commands in that file need absolute paths — `$CLAUDE_PROJECT_DIR`
+is the project folder there.
 
 Keep the Mac plugged in with the lid open. Ctrl-C in the relay terminal stops it.
 Tunables (env): `PM_RELAY_STOP_5H` (0.95), `PM_RELAY_STOP_7D` (0.97),
@@ -248,6 +258,10 @@ otherwise `prospector` checks whether to adopt an existing tool or build.
 - **Adopt** — stops; verdict and report path are noted on the idea.
 - **Build / Adopt + extend** — continues into `atelier`. ▶ researches and promotes the idea
   to a project (state + backlog, no code). ▶▶ also scaffolds `PM_ROOT/<slug>/` and builds.
+
+Todos written by Claude read like todos you'd write: one per checkpoint ("Build block A, tell
+me how to test it, and wait for me to test it"), not one per internal phase. The phase list lives
+in the plan and the project's state `Next`.
 
 Use ▸ to move an idea to an existing project by hand.
 
@@ -288,6 +302,8 @@ Each finding has a **💬 Fix with Claude** button: it opens a terminal Claude C
 seeded with the finding, which investigates read-only, then interviews you with
 `AskUserQuestion` about root cause and fix options before changing anything. Same launch
 guard as the other build buttons (loopback or `PM_TOKEN`); macOS terminal launch (see above).
+With 2+ open findings, **💬 Fix all N with Claude** does the same for every open finding in
+one session. That's cheaper than one session per finding, since each new session re-pays its startup context.
 
 pm can't see how that session ends, so the finding is tracked by you: launching marks it
 **in progress**, then **✓ Mark done**, **Dismiss**, or **Reopen**. A finding still in progress
@@ -327,17 +343,61 @@ All optional, via environment variables:
 |---|---|---|
 | `PM_ROOT` | parent of this package | Workspace root that owns `.claude/` |
 | `PM_PORT` / `PORT` | `4500` | Server port |
-| `PM_TOKEN` | unset | Shared secret for launch routes (`?token=` or `x-pm-token`). Needed to launch from a phone |
+| `PM_HOST` | `127.0.0.1` | Bind address; non-loopback needs `PM_TOKEN` unless it's a Tailscale `100.x` IP |
+| `PM_TOKEN` | unset | Shared secret for the API (`?token=` or `x-pm-token`) and launch routes |
 | `PM_DOCTOR_INTERVAL_MIN` / `PM_DOCTOR_DAYS` | `360` / `14` | Doctor scan period (0 = off) and look-back window |
 | `PM_RELAY_*` | see above | Unattended relay tunables (macOS only) |
 | `CONTINUOUS_ROOT` | `$PM_ROOT/continuous` | Location of the optional runner |
 | `PM_SELF_SLUG` | unset | Project shown in the right-hand side pane (and left out of the card list) |
 
+## From your phone (Tailscale + Termius)
+
+Run the board's keyboard UI over SSH — nothing is exposed, no port is opened.
+
+1. On the Mac that holds your workspace: install [Tailscale](https://tailscale.com), enable
+   **Remote Login** (macOS: System Settings → General → Sharing; Windows/Linux: run an
+   OpenSSH server). Keep the machine awake (macOS: `caffeinate -s`, or Energy settings).
+2. On the phone: Tailscale app signed into the same tailnet, then in Termius add a host
+   with the Mac's Tailscale name/IP and your usual SSH user (key auth recommended).
+3. Connect and run:
+
+```sh
+cd path/to/pm && PM_ROOT=path/to/workspace npm run tui
+```
+
+| Key | Action |
+|---|---|
+| `↑↓` / `j k` | move |
+| `enter` / `→` / `l` | open project |
+| `a` | add a todo (type, `enter`; `esc` cancels) |
+| `m` then `1-4` | move task to Doing / Todo / Blocked / Done |
+| `d` | show / hide Done |
+| `space` | mark / unmark a todo (`◆`) |
+| `x`, then `y` | run the marked todos (or the highlighted one) as one unattended Claude job |
+| `r` | jobs: status, age, todos left, latest actions; `s` then `y` stops one |
+| `←` / `h` / `b` / `esc`, `q` | back, quit |
+
+The line above the footer shows your Claude 5h / 7d usage and reset countdowns, read from
+the same status cache as the board's usage view (`~/.claude/vscode-claude-status-cache.json`,
+written by the VS Code extension; marked `(stale)` when old, hidden when absent).
+
+It reads and writes the same Markdown files as the web app (per-todo token counts included)
+and refreshes every few seconds. Todos owned by a live job show `⟳ running` (or `⏸ waiting`
+for a rate-limit pause) in the project view, and `⟳N` in the project list. Runs start as a
+background relay job on the Mac (no terminal window; `claude` must be on the PATH of your SSH
+shell). Sessions you open by hand in a terminal aren't tracked — only relay jobs are.
+
+To use the **web UI** from the phone instead, bind to the Mac's Tailscale address:
+`PM_HOST=100.x.y.z npm start` (after `npm run build`), then open `http://100.x.y.z:4500`.
+
 ## Security
 
-The server binds `0.0.0.0` so a phone on your LAN can reach it, and is
-**unauthenticated by default**. Launch routes accept only loopback clients or a valid
-`PM_TOKEN`. Set `PM_TOKEN` if the network isn't trusted.
+The server binds **`127.0.0.1` by default**. `PM_HOST` may be a Tailscale address
+(`100.64.0.0/10`, the tailnet authenticates the peer) or, with `PM_TOKEN` set, any other
+interface — otherwise it refuses to start. Launch routes accept only loopback clients or a
+valid `PM_TOKEN`. Don't put `tailscale serve`/a reverse proxy in front without `PM_TOKEN`:
+the proxy connects from loopback, which counts as trusted for launch routes. The web UI
+doesn't send a token, so with `PM_TOKEN` set use the TUI or API clients.
 
 ## Contributing
 

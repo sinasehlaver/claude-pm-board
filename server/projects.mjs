@@ -1,20 +1,19 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { RULES_DIR, STATE_DIR, HANDOFFS_DIR } from "./paths.mjs";
+import { PM_ROOT, RULES_DIR, STATE_DIR, HANDOFFS_DIR } from "./paths.mjs";
 import { kindOf, entryDir, readEntries } from "./entries.mjs";
 import { readState } from "./state.mjs";
 import { readBacklog, listBacklogSlugs } from "./backlog.mjs";
 import { readActivity, lastTouched, matchesProject } from "./activity.mjs";
 import { sessionsFor } from "./sessions.mjs";
 
-const IGNORE = new Set(["_TEMPLATE"]);
 
 async function mdSlugs(dir) {
   try {
     return (await readdir(dir))
       .filter((f) => f.endsWith(".md"))
       .map((f) => f.slice(0, -3))
-      .filter((s) => !IGNORE.has(s));
+      .filter((s) => !s.startsWith("_")); // _-prefixed = _TEMPLATE / cross-project rules, not projects
   } catch (e) {
     if (e.code === "ENOENT") return [];
     throw e;
@@ -51,6 +50,58 @@ async function ruleTitle(slug) {
   }
 }
 
+// First prose paragraph after the H1 (skips frontmatter, headings, code fences, bare
+// `bullet` lists). Pure so it can be tested; capped so a huge paragraph can't bloat the list.
+export function extractDescription(md, max = 180) {
+  const lines = String(md || "").replace(/^---\n[\s\S]*?\n---\n/, "").split("\n");
+  let seenH1 = false;
+  let para = [];
+  let fence = false;
+  for (const raw of lines) {
+    const l = raw.trim();
+    if (l.startsWith("```")) {
+      fence = !fence;
+      if (para.length) break;
+      continue;
+    }
+    if (fence) continue;
+    if (/^#\s/.test(l) && !seenH1) {
+      seenH1 = true;
+      continue;
+    }
+    if (/^#{1,6}\s/.test(l) || /^(\||-{3,}|>|<)/.test(l)) {
+      if (para.length) break;
+      continue;
+    }
+    if (!l) {
+      if (para.length) break;
+      continue;
+    }
+    para.push(l);
+  }
+  return clean(para.join(" "), max);
+}
+
+const SLUG_RE = /^[a-z0-9][a-z0-9._-]*$/i;
+
+const clean = (t, max) => {
+  const text = t.replace(/\*\*|__|`/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\s+/g, " ").trim();
+  const first = text.length > max && text.slice(0, max).match(/^(.{30,}[.!?])(\s|$)/)?.[1];
+  const out = first || text;
+  return out.length > max ? `${out.slice(0, max - 1).trimEnd()}…` : out;
+};
+
+async function description(slug) {
+  const read = async (p) => {
+    try {
+      return await readFile(p, "utf8");
+    } catch {
+      return "";
+    }
+  };
+  return SLUG_RE.test(slug) ? extractDescription(await read(join(PM_ROOT, slug, "README.md"))) : "";
+}
+
 async function newestHandoff(slug) {
   try {
     const hits = (await readdir(HANDOFFS_DIR))
@@ -84,6 +135,7 @@ export async function listProjects(kind = "project") {
         slug,
         title: (await ruleTitle(slug)) || slug,
         kind: kindOf(slug),
+        description: await description(slug),
         adhoc: slug !== "ideas" && !rulesSet.has(slug) && !adhocDir,
         pinned: slug === "ideas",
         status: st ? st.now : "",
@@ -114,6 +166,7 @@ export async function getProject(slug) {
     title: (await ruleTitle(slug)) || slug,
     kind: kindOf(slug),
     path: readEntries()[slug]?.path || null,
+    description: await description(slug),
     adhoc: slug !== "ideas" && !(await hasDir(slug)) && !(await ruleTitle(slug)),
     pinned: slug === "ideas",
     state: st,

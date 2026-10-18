@@ -40,3 +40,11 @@ test("detail bundles state + backlog + filtered activity", async () => {
   assert.equal(p.activity.length, 1);
   assert.equal(await getProject("nope"), null);
 });
+
+test("extractDescription takes the first prose paragraph after the H1", async () => {
+  const { extractDescription } = await import("./projects.mjs");
+  const md = "---\npaths: x/**\n---\n\n# x — thing\n\nA **small** tool for `things`.\nSecond line.\n\n```\nnpm i\n```\n\n## Next\nignored\n";
+  assert.equal(extractDescription(md), "A small tool for things. Second line.");
+  assert.equal(extractDescription("# only heading\n"), "");
+  assert.ok(extractDescription(`# t\n\n${"word ".repeat(100)}`).length <= 180);
+});

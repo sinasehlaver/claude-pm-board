@@ -22,13 +22,18 @@ export const fmtTok = (n) =>
 export default function TokBadge({ rec }) {
   if (!rec?.tokens) return null;
   const n = rec.sessions.length;
-  const tip = `${rec.tokens.toLocaleString()} tokens across ${n} session${n === 1 ? "" : "s"}${
+  const cached = Math.min(rec.cached || 0, rec.tokens);
+  const breakdown = cached
+    ? ` (${(rec.tokens - cached).toLocaleString()} new = input + output + cache writes; ${cached.toLocaleString()} cache reads, the context re-read every turn)`
+    : "";
+  const tip = `${rec.tokens.toLocaleString()} tokens${breakdown} across ${n} session${n === 1 ? "" : "s"}${
     rec.split ? " (evenly split across the todos of a batch: an estimate)" : ""
   }`;
   return (
     <span className="tokbadge" title={tip}>
       {rec.split ? "~" : ""}
       {fmtTok(rec.tokens)} tok
+      {cached > 0 && <span className="tokbadge-sub"> · {fmtTok(rec.tokens - cached)} new</span>}
     </span>
   );
 }

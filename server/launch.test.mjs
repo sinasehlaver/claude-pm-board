@@ -9,6 +9,14 @@ const root = mkdtempSync(join(tmpdir(), "pm-launch-")); // no real .claude/setti
 process.env.PM_ROOT = root;
 const { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForDoctorFinding, launchClaude } = await import("./launch.mjs");
 
+test("seedForSequentialRun: single todo skips the subagent, multiple fan out", () => {
+  const one = seedForSequentialRun({ slug: "p", tasks: [{ title: "a" }] });
+  assert.match(one, /do it directly yourself/);
+  assert.doesNotMatch(one, /Spawn a subagent per todo/);
+  const two = seedForSequentialRun({ slug: "p", tasks: [{ title: "a" }, { title: "b" }] });
+  assert.match(two, /Spawn a subagent per todo/);
+});
+
 test("seedForTask includes rules pointers for real projects, not ad-hoc", () => {
   const real = seedForTask({ slug: "hub", title: "do X", note: "the note" });
   assert.match(real, /TASK: do X/);
@@ -37,6 +45,18 @@ test("seedForTask routes Ideas items to research-only atelier/venturemind triage
   assert.doesNotMatch(s, /TASK:/);
 });
 
+test("todo-writing seeds file human-voice todos, never one per phase/finding", () => {
+  const idea = seedForTask({ slug: "ideas", title: "x" });
+  const seq = seedForSequentialRun({ slug: "ideas", tasks: [{ title: "x" }] });
+  const sec = seedForSecurityAudit({ slug: "hub" });
+  for (const s of [idea, seq]) {
+    assert.match(s, /HUMAN-READABLE todos only/);
+    assert.doesNotMatch(s, /one Todo (task )?per (remaining\s+implementation )?phase/);
+  }
+  assert.match(sec, /ONE human-readable backlog Todo/);
+  assert.doesNotMatch(sec, /one backlog Todo per confirmed finding/);
+});
+
 test("ideas research triage is ordered: venturemind, then prospector first, adopt stops before atelier", () => {
   const s = seedForTask({ slug: "ideas", title: "a cool idea" });
   assert.match(s, /prospector/);
@@ -60,7 +80,7 @@ test("seedForSequentialRun lists every todo, the burn-rate sources, and rules po
   assert.match(s, /1\. todo one/);
   assert.match(s, /a note/);
   assert.match(s, /2\. todo two/);
-  assert.match(s, /ONE-SHOT SESSION/);
+  assert.match(s, /SINGLE-SESSION PACING/);
   assert.doesNotMatch(s, /vscode-claude-status-cache|localhost:4310/);
   assert.match(s, /\.claude\/rules\/hub\.md/);
 
@@ -78,7 +98,7 @@ test("seedForSequentialRun words the batch by mode: @seq-flagged only in seq mod
   assert.match(all, /batch of 3 todo\(s\)/);
   assert.doesNotMatch(all, /@seq-flagged/);
   assert.doesNotMatch(all, /drop its @seq marker/);
-  assert.match(all, /ONE-SHOT SESSION/);
+  assert.match(all, /SINGLE-SESSION PACING/);
   assert.doesNotMatch(all, /localhost:4310|vscode-claude-status-cache|PRE-LAUNCH/);
 });
 
@@ -97,7 +117,7 @@ test("seedForCrossProjectRun groups by project and carries pacing + read-first r
   assert.match(s, /DIFFERENT projects[^\n]*\n?[^\n]*parallel/);
   assert.match(s, /SAME project run sequentially/);
   assert.match(s, /move it to Done/);
-  assert.match(s, /ONE-SHOT SESSION/);
+  assert.match(s, /SINGLE-SESSION PACING/);
   assert.doesNotMatch(s, /localhost:4310|vscode-claude-status-cache/);
 });
 
@@ -118,7 +138,7 @@ test("seedForSequentialRun on ideas promotes each into a real pm project", () =>
   assert.match(s, /CONTEXT\.md/);
   assert.match(s, /mkdir PM_ROOT\/<slug>\//);
   assert.match(s, /Remove the idea's bullet from \.claude\/backlog\/ideas\.md/);
-  assert.match(s, /ONE-SHOT SESSION/);
+  assert.match(s, /SINGLE-SESSION PACING/);
   assert.doesNotMatch(s, /localhost:4310|vscode-claude-status-cache/);
 });
 
@@ -216,4 +236,13 @@ test("launchClaude passes workspace settings when the file exists", async () => 
   writeFileSync(join(root, ".claude", "settings.local.json"), "{}");
   const r = await launchClaude({ cwd: "/tmp", resumeId: "abcd-1234" });
   assert.match(r.cmd, /claude '--settings' '.*settings\.local\.json' --resume 'abcd-1234'$/);
+});
+
+test("build seeds carry the port-registry note; ideas research and audit do not", () => {
+  const task = seedForTask({ slug: "hub", title: "x" });
+  const seq = seedForSequentialRun({ slug: "hub", tasks: [{ title: "x" }] });
+  const cross = seedForCrossProjectRun({ tasks: [{ slug: "hub", title: "x" }] });
+  for (const s of [task, seq, cross]) assert.match(s, /\.claude\/ports\.md/);
+  assert.doesNotMatch(seedForTask({ slug: "ideas", title: "x" }), /ports\.md/);
+  assert.doesNotMatch(seedForSecurityAudit({ slug: "hub" }), /ports\.md/);
 });

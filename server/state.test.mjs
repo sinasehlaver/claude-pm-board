@@ -43,6 +43,12 @@ test("serialize throws past the 4000-char cap", () => {
   assert.throws(() => serializeState(s), /4000-char cap/);
 });
 
+test("serialize throws past the 4000-char cap", () => {
+  const s = parseState(CANON, "hub");
+  s.now = "x".repeat(4000);
+  assert.throws(() => serializeState(s), /4000-char cap/);
+});
+
 test("missing sections default to 'none'", () => {
   const s = parseState("# x — state\nUpdated: 2026-01-01\n\n## Now\n- [ ] go\n", "x");
   assert.equal(s.lastFailure, "none");

@@ -92,6 +92,15 @@ export function RelayStrip() {
                 ? `run ${j.attempt} · ${j.open} left`
                 : `${j.open} left · ${j.events?.[j.events.length - 1]?.msg || ""}`}
           </span>
+          {j.status === "running" && j.activity?.length > 0 && (
+            <ul className="relay-activity" aria-label="latest activity">
+              {j.activity.slice(-4).map((a, i) => (
+                <li key={`${a.at}-${i}`} className={`${a.sub ? "sub" : ""} ${a.kind === "say" ? "say" : ""}`}>
+                  {a.text}
+                </li>
+              ))}
+            </ul>
+          )}
           {!LIVE.has(j.status) && (
             <button type="button" className="relay-dismiss" aria-label={`dismiss ${j.label}`} onClick={() => dismiss(j.id)}>
               ✕

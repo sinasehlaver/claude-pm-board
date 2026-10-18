@@ -22,6 +22,13 @@ const asst = (id, out, ts = new Date().toISOString(), inp = 100) => ({
 });
 const user = (text) => ({ type: "user", message: { role: "user", content: text } });
 
+test("foldRuns carries the cache_read share (split evenly) and tolerates old totals without it", () => {
+  const runs = [{ id: "r1", todos: [{ slug: "s", title: "a" }, { slug: "s", title: "b" }] }, { id: "r2", todos: [{ slug: "s", title: "c" }] }];
+  const f = T.foldRuns(runs, { r1: { tokens: 100, cached: 80, sessions: ["x"], ts: 1 }, r2: { tokens: 10, sessions: ["y"], ts: 2 } });
+  assert.equal(f.s.a.cached, 40);
+  assert.equal(f.s.c.cached, 0);
+});
+
 test("markPrompt/newRunId format is matched by the transcript marker", () => {
   const id = T.newRunId();
   assert.match(T.markPrompt("hello", id), new RegExp(`pm-run: ${id}`));

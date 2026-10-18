@@ -403,11 +403,15 @@ function projectedResetMs(turns, now, windowMs, usedTokens, cap) {
 // happened lately (terminal sessions, incl. pm's own launch buttons, never
 // touch this file — confirmed the CLI binary itself contains no code that
 // writes it, it's extension-only).
-function liveCacheFor(cache, key) {
+function liveCacheFor(cache, key, usedTokens = 0) {
   if (!cache || cache.stale) return null;
-  if (key === "5h") return { utilization: cache.utilization5h, resetAt: cache.reset5hAt };
-  if (key === "7d") return { utilization: cache.utilization7d, resetAt: cache.reset7dAt };
-  return null; // the cache has no 30d field at all
+  let live = null;
+  if (key === "5h") live = { utilization: cache.utilization5h, resetAt: cache.reset5hAt };
+  else if (key === "7d") live = { utilization: cache.utilization7d, resetAt: cache.reset7dAt };
+  // 0% while local logs show burn in the window = the cache never saw those
+  // (terminal) requests, not a genuinely idle account.
+  if (live && live.utilization === 0 && usedTokens > 0) return null;
+  return live; // the cache has no 30d field at all
 }
 
 // Account-wide rate-limit ceiling for all three windows, each independently
@@ -443,7 +447,7 @@ export async function accountRateLimitStatus(now = Date.now()) {
     let entry;
 
     if (mode === "synced") {
-      const live = liveCacheFor(cache, w.key);
+      const live = liveCacheFor(cache, w.key, used);
       if (live && live.utilization != null) {
         const capTokens = caps[w.key].cap; // Anthropic gives % only — back tokens out for display
         entry = {

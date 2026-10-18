@@ -8,13 +8,14 @@ import { KINDS, entryDir } from "./entries.mjs";
 import { readState, writeState } from "./state.mjs";
 import { readBacklog, writeBacklog, emptyBacklog, runnableTasks } from "./backlog.mjs";
 import { listSessions, fileSession, sessionToTask, sessionToNewProject, moveTask } from "./sessions.mjs";
-import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForDoctorFinding, launchClaude, launchRelay } from "./launch.mjs";
+import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForDoctorFinding, seedForDoctorFindings, launchClaude, launchRelay } from "./launch.mjs";
 import { listRelayJobs, relayDir, dismissRelay } from "./relay.mjs";
 import { latestTodos, resolveCrossItems } from "./todos.mjs";
 import { taskTokens } from "./tokens.mjs";
 import { openFile } from "./open.mjs";
 import { harvest as runHarvest } from "./harvest.mjs";
 import { scanEnvs, updateEnv } from "./envs.mjs";
+import { resolveHost, tokenMatches } from "./bind.mjs";
 import { readDoctor, scanAndCache, startDoctorTimer, withStatuses, setStatus, verifyFinding, FINDING_STATUSES, NOTE_MAX } from "./doctor.mjs";
 import {
   burnSnapshot,
@@ -32,7 +33,7 @@ const TOKEN = process.env.PM_TOKEN || "";
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
 const SESSION_ID_RE = /^[a-f0-9][a-f0-9-]{7,}$/i;
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-const hasToken = (req) => TOKEN && (req.query.token === TOKEN || req.get("x-pm-token") === TOKEN);
+const hasToken = (req) => tokenMatches(req.query.token, TOKEN) || tokenMatches(req.get("x-pm-token"), TOKEN);
 const canLaunch = (req) => LOOPBACK.has(req.ip) || hasToken(req);
 // Batch runs (run-seq / run-cross) default to the unattended relay; `{unattended:false}`
 // opts back into a plain interactive session.
@@ -43,8 +44,7 @@ app.use(express.json());
 
 // optional shared-secret guard (off unless PM_TOKEN is set)
 app.use("/api", (req, res, next) => {
-  if (TOKEN && req.query.token !== TOKEN && req.get("x-pm-token") !== TOKEN)
-    return res.status(401).json({ error: "bad token" });
+  if (TOKEN && !hasToken(req)) return res.status(401).json({ error: "bad token" });
   next();
 });
 
@@ -430,6 +430,19 @@ app.post("/api/doctor/findings/:id/fix", async (req, res, next) => {
     next(e);
   }
 });
+// "Fix all": every open (not done/dismissed), non-info finding in ONE session.
+app.post("/api/doctor/fix-all", async (req, res, next) => {
+  try {
+    if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
+    const fs = (withStatuses(readDoctor())?.findings || []).filter((f) => f.severity !== "info" && !["done", "dismissed"].includes(f.status));
+    if (!fs.length) return res.status(400).json({ error: "nothing to fix" });
+    const launched = await launchClaude({ cwd: PM_ROOT, prompt: seedForDoctorFindings(fs) });
+    for (const f of fs) if (f.status !== "fixing") setStatus(f.id, "fixing");
+    res.json({ ok: true, count: fs.length, ...launched });
+  } catch (e) {
+    next(e);
+  }
+});
 // pm can't see how the launched session ended, so the user records the outcome:
 // fixing (set on launch) -> done | dismissed, or back to open. Finding must exist in the cached scan.
 app.post("/api/doctor/findings/:id/status", (req, res) => {
@@ -531,6 +544,11 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: String(err.message || err) });
 });
 
-app.listen(PORT, "0.0.0.0", () =>
-  console.log(`pm on http://0.0.0.0:${PORT}  (root: ${PM_ROOT})`),
-);
+let HOST;
+try {
+  HOST = resolveHost();
+} catch (e) {
+  console.error(`pm: ${e.message}`);
+  process.exit(1);
+}
+app.listen(PORT, HOST, () => console.log(`pm on http://${HOST}:${PORT}  (root: ${PM_ROOT})`));

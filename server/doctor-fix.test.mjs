@@ -17,6 +17,7 @@ writeFileSync(
     findings: [
       { id: "large-reads", severity: "medium", title: "Big reads", evidence: { sample: "x" }, suggestion: "Grep first", target: "CLAUDE.md" },
       { id: "all-clear", severity: "info", title: "ok", evidence: {}, suggestion: "", target: "none" },
+      { id: "long-sessions", severity: "high", title: "Marathon sessions", evidence: {}, suggestion: "Handoff", target: "CLAUDE.md" },
     ],
   }),
 );
@@ -118,4 +119,22 @@ test("verify reports no-data when no session ran since the fix, and stores it", 
   assert.equal(j.result, "no-data");
   assert.equal((await listed()).find((f) => f.id === "large-reads").verify.result, "no-data");
   await status("large-reads", { status: "open" });
+});
+
+test("fix-all seeds ONE session with every open non-info finding, skips dismissed", async () => {
+  await status("long-sessions", { status: "dismissed" });
+  const all = () => fetch(`${B}/api/doctor/fix-all`, { method: "POST" });
+  let d = await (await all()).json();
+  assert.equal(d.count, 1);
+  await status("long-sessions", { status: "open" });
+  d = await (await all()).json();
+  assert.equal(d.count, 2);
+  const prompt = readFileSync(d.cmd.match(/cat '([^']+)'/)[1], "utf8");
+  assert.match(prompt, /flagged 2 problems/);
+  assert.match(prompt, /Big reads[\s\S]*Marathon sessions/);
+  assert.doesNotMatch(prompt, /id all-clear/);
+  assert.equal((await listed()).find((f) => f.id === "long-sessions").status, "fixing");
+  await status("large-reads", { status: "dismissed" });
+  await status("long-sessions", { status: "dismissed" });
+  assert.equal((await all()).status, 400);
 });

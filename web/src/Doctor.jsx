@@ -155,6 +155,16 @@ export default function Doctor({ onBack }) {
     }));
 
   const findings = data?.findings || [];
+  const open = findings.filter((f) => f.severity !== "info" && f.status !== "done" && f.status !== "dismissed");
+  const fixAll = async () => {
+    setErr("");
+    try {
+      await send("POST", "/doctor/fix-all");
+      for (const f of open) if (f.status !== "fixing") setFindingStatus(f.id, "fixing");
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
   return (
     <div className="screen">
       <header className="bar">
@@ -180,6 +190,14 @@ export default function Doctor({ onBack }) {
         {data?.generatedAt && (
           <p className="muted doc-sum">
             {data.scope.sessions} sessions · {k(data.totals.tokens)} tokens · {data.totals.errors} tool errors
+            {open.length > 1 && (
+              <>
+                {" · "}
+                <button className="link" onClick={fixAll} title="One Claude Code session that walks through every open finding — cheaper than one session each">
+                  💬 Fix all {open.length} with Claude
+                </button>
+              </>
+            )}
           </p>
         )}
         <ul className="doc-list">

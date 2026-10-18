@@ -13,7 +13,7 @@ const EMPTY_RESUME = { lastResult: "", rerun: "", branch: "", artifacts: "" };
 export default function Project({ slug, data, projects, onBack, reload }) {
   const [editing, setEditing] = useState(false);
   const [showStatus, setShowStatus] = useState(false);
-  const [doneOpen, setDoneOpen] = useState(false);
+  const [sectionOpen, setSectionOpen] = useState({ Blocked: false, Done: false });
   const [unattended, setUnattended] = useState(loadUnattended);
   const [color, setColor] = useState(() => loadColor(slug));
   const tokens = useTaskTokens(data);
@@ -70,6 +70,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
   return (
     <div className="screen pc has-pc" style={slugStyle(slug, color)}>
       <Bar title={data.title} onBack={onBack} />
+      {data.description && <p className="proj-desc">{data.description}</p>}
       <ColorPane
         value={color}
         onChange={(n) => {
@@ -158,27 +159,35 @@ export default function Project({ slug, data, projects, onBack, reload }) {
         {STATES.map((st) => {
           const rows = tasks.filter((t) => t.state === st);
           if (!rows.length) return null;
-          const isDone = st === "Done";
-          const open = !isDone || doneOpen;
+          const collapsible = st === "Blocked" || st === "Done";
+          const isOpen = !!sectionOpen[st];
+          const open = !collapsible || isOpen;
+          const toggle = () => setSectionOpen((m) => ({ ...m, [st]: !m[st] }));
           return (
             <div key={st} className="tg">
-              {isDone ? (
+              {collapsible ? (
                 <h3
                   className="tg-toggle"
                   role="button"
                   tabIndex={0}
-                  aria-expanded={doneOpen}
-                  onClick={() => setDoneOpen((v) => !v)}
+                  aria-expanded={isOpen}
+                  onClick={toggle}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      setDoneOpen((v) => !v);
+                      toggle();
                     }
                   }}
                 >
-                  <span className={`chevron${doneOpen ? " open" : ""}`}>▸</span>
-                  {doneOpen ? "Done" : `Done (${rows.length})`}
-                  <Help text="Finished tasks, tucked away by default so the active list stays short. Click here to show or hide them." />
+                  <span className={`chevron${isOpen ? " open" : ""}`}>▸</span>
+                  {isOpen ? st : `${st} (${rows.length})`}
+                  <Help
+                    text={
+                      st === "Done"
+                        ? "Finished tasks, tucked away by default so the active list stays short. Click here to show or hide them."
+                        : "Tasks waiting on something, tucked away by default. Click here to show or hide them."
+                    }
+                  />
                 </h3>
               ) : (
                 <h3>{st}</h3>

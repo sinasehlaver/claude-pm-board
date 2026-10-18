@@ -224,6 +224,9 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px;
 }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
+.desc { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.desc + .status { margin-top: 8px; }
+.proj-desc { margin: 4px 16px 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .status { margin: 6px 0 8px; color: var(--text); }
 .meta { display: flex; gap: 14px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 
@@ -617,6 +620,14 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
 .pill.relay-waiting { color: #fff; background: var(--accent2); border-color: var(--accent2); }
 .pill.relay-done { color: #fff; background: #2fae63; border-color: #2fae63; }
 .pill.relay-failed, .pill.relay-dead { color: #fff; background: var(--bad); border-color: var(--bad); }
+.relay-activity {
+  flex-basis: 100%; margin: 2px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+}
+.relay-activity li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.relay-activity li.sub { padding-left: 12px; }
+.relay-activity li.say { font-family: inherit; font-style: italic; }
+.relay-activity li:last-child { color: var(--text); }
 .relay-dismiss {
   margin-left: auto; width: 20px; height: 20px; padding: 0; border: none; background: none;
   color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; border-radius: 50%;
@@ -642,6 +653,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-
   border: 1px solid var(--line); cursor: default;
   transition: color 0.16s var(--ease), border-color 0.16s var(--ease), background-color 0.16s var(--ease);
 }
+.tokbadge-sub { font-weight: 500; opacity: 0.8; }
 .tokbadge:hover { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-tint); }
 
 /* doctor */

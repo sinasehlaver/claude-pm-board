@@ -13,7 +13,8 @@
     "app:pack": "npm run build && electron-builder --dir",
     "app:dmg": "npm run build && electron-builder",
     "test": "node --test server/*.test.mjs",
-    "verify": "bash scripts/verify.sh"
+    "verify": "bash scripts/verify.sh",
+    "tui": "node server/tui.mjs"
   },
   "dependencies": {
     "express": "^4.21.2"

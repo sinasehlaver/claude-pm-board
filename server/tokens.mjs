@@ -128,7 +128,7 @@ async function scanRuns(runs) {
     } catch {
       continue;
     }
-    const r = out.get(m.runId) || { tokens: 0, sessions: [], ts: 0 };
+    const r = out.get(m.runId) || { tokens: 0, cached: 0, sessions: [], ts: 0 };
     if (!r.sessions.includes(m.sid)) r.sessions.push(m.sid);
     for (const t of turns) {
       if (t.id) {
@@ -136,6 +136,7 @@ async function scanRuns(runs) {
         seen.add(t.id);
       }
       r.tokens += tokenSum(t);
+      r.cached += t.cache_read || 0;
       r.ts = Math.max(r.ts, t.ts);
     }
     out.set(m.runId, r);
@@ -151,8 +152,9 @@ export function foldRuns(runs, totals) {
     if (!t || !t.tokens) continue;
     const n = run.todos.length;
     for (const todo of run.todos) {
-      const e = ((tasks[todo.slug] ||= {})[todo.title] ||= { tokens: 0, sessions: [], split: false, updatedAt: null });
+      const e = ((tasks[todo.slug] ||= {})[todo.title] ||= { tokens: 0, cached: 0, sessions: [], split: false, updatedAt: null });
       e.tokens += Math.round(t.tokens / n);
+      e.cached += Math.round((t.cached || 0) / n);
       for (const s of t.sessions) if (!e.sessions.includes(s)) e.sessions.push(s);
       if (n > 1) e.split = true;
       const at = t.ts ? new Date(t.ts).toISOString() : null;
@@ -172,7 +174,7 @@ export async function refreshTaskTokens() {
   for (const run of runs) {
     const s = scanned.get(run.id);
     const p = prev[run.id];
-    if (s && (!p || s.tokens >= p.tokens)) totals[run.id] = { tokens: s.tokens, sessions: s.sessions, ts: s.ts };
+    if (s && (!p || s.tokens >= p.tokens)) totals[run.id] = { tokens: s.tokens, cached: s.cached, sessions: s.sessions, ts: s.ts };
     else if (p) totals[run.id] = p;
   }
   const tasks = foldRuns(runs, totals);

@@ -22,7 +22,7 @@ function turn({ id, tsMsAgo, model = "claude-sonnet-5", usage }) {
   });
 }
 
-const projDir = join(root, "-Users-sina-Projects-hub");
+const projDir = join(root, "-Users-me-Projects-hub");
 mkdirSync(projDir, { recursive: true });
 writeFileSync(
   join(projDir, "main-session.jsonl"),
@@ -50,7 +50,7 @@ writeFileSync(
 // the LAST line for an id is the final, complete usage. Own fixture root so
 // it never perturbs the rolling-window sums above.
 const streamRoot = mkdtempSync(join(tmpdir(), "pm-usage-stream-"));
-const streamDir = join(streamRoot, "-Users-sina-Projects-stream");
+const streamDir = join(streamRoot, "-Users-me-Projects-stream");
 mkdirSync(streamDir, { recursive: true });
 writeFileSync(
   join(streamDir, "stream-session.jsonl"),
@@ -75,7 +75,7 @@ function rejection({ tsMsAgo, rateLimitType }) {
 }
 
 const capRoot = mkdtempSync(join(tmpdir(), "pm-usage-caps-"));
-const capDir = join(capRoot, "-Users-sina-Projects-caps");
+const capDir = join(capRoot, "-Users-me-Projects-caps");
 mkdirSync(capDir, { recursive: true });
 writeFileSync(
   join(capDir, "cap-session.jsonl"),
@@ -273,6 +273,31 @@ test("accountRateLimitStatus (mode=synced) reports the real vscode cache % + res
   }
 });
 
+test("accountRateLimitStatus (mode=synced) treats a fresh 0% as unavailable when local logs show burn in the window", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "pm-usage-limitscfg-"));
+  freshLimitsPath(dir);
+  writeUsageLimitsWindow("5h", { mode: "synced" });
+  const cachePath = join(root, "zero-cache.json");
+  writeFileSync(
+    cachePath,
+    JSON.stringify({
+      updatedAt: new Date(now - 1000).toISOString(),
+      usageData: { utilization5h: 0, utilization7d: 0, limitStatus: "allowed" },
+    }),
+  );
+  process.env.CLAUDE_STATUS_CACHE = cachePath;
+  try {
+    const s = await accountRateLimitStatus(now);
+    const w = s.windows["5h"];
+    if (w.usedTokens > 0) {
+      assert.equal(w.available, false);
+      assert.equal(w.utilization, null);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("accountRateLimitStatus (mode=synced) is unavailable rather than silently estimating when the cache is stale/absent", async () => {
   const dir = mkdtempSync(join(tmpdir(), "pm-usage-limitscfg-"));
   freshLimitsPath(dir);
@@ -323,7 +348,7 @@ test("accountRateLimitStatus (mode=manual) is unavailable until a value is actua
 
 test("paceBreakdown only counts turns inside the pace window, not the full hour", async () => {
   const paceRoot = mkdtempSync(join(tmpdir(), "pm-usage-pace-"));
-  const dir = join(paceRoot, "-Users-sina-Projects-pace");
+  const dir = join(paceRoot, "-Users-me-Projects-pace");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "pace-session.jsonl"),
@@ -346,7 +371,7 @@ test("paceBreakdown only counts turns inside the pace window, not the full hour"
 
 test("accountRateLimitStatus projects a reset time once estimated usage exceeds the learned cap", async () => {
   const overRoot = mkdtempSync(join(tmpdir(), "pm-usage-over-"));
-  const dir = join(overRoot, "-Users-sina-Projects-over");
+  const dir = join(overRoot, "-Users-me-Projects-over");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "over-session.jsonl"),
@@ -390,7 +415,7 @@ test("accountRateLimitStatus (mode=manual) uses a plain rolling sum, same as est
   // Anthropic's real window actually opened. A turn just outside the window
   // must not count, and one just inside must, exactly like sumSince.
   const winRoot = mkdtempSync(join(tmpdir(), "pm-usage-manualroll-"));
-  const dir = join(winRoot, "-Users-sina-Projects-manualroll");
+  const dir = join(winRoot, "-Users-me-Projects-manualroll");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "manualroll-session.jsonl"),
@@ -415,7 +440,7 @@ test("accountRateLimitStatus (mode=manual) uses a plain rolling sum, same as est
 
 test("accountRateLimitStatus (mode=manual) 30d and 7d sum independently — an old turn outside 7d still counts toward 30d", async () => {
   const winRoot = mkdtempSync(join(tmpdir(), "pm-usage-30d-"));
-  const dir = join(winRoot, "-Users-sina-Projects-30d");
+  const dir = join(winRoot, "-Users-me-Projects-30d");
   mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dir, "thirtyd-session.jsonl"),

@@ -122,10 +122,15 @@ test("relay seeds: unattended pacing replaces the stop-and-exit pacing", () => {
     assert.match(s, /UNATTENDED RUN/);
     assert.match(s, /resumes this SAME session/);
     assert.match(s, /do NOT stop early/i);
-    assert.doesNotMatch(s, /ONE-SHOT SESSION/);
+    assert.doesNotMatch(s, /SINGLE-SESSION PACING/);
+    assert.doesNotMatch(s, /ask with AskUserQuestion/);
+    assert.match(s, /state assumptions and proceed/);
     assert.doesNotMatch(s, /localhost:4310|vscode-claude-status-cache/);
   }
-  assert.match(seedForSequentialRun({ slug: "hub", tasks }), /ONE-SHOT SESSION/);
+  const interactive = seedForSequentialRun({ slug: "hub", tasks });
+  assert.match(interactive, /SINGLE-SESSION PACING/);
+  assert.match(interactive, /ask with AskUserQuestion BEFORE/);
+  assert.match(seedForCrossProjectRun({ tasks }), /ask with AskUserQuestion BEFORE/);
 });
 
 test("launchRelay (dryrun): writes a spec and builds a caffeinate + node relay-cli command", async () => {
@@ -174,14 +179,15 @@ if (!resume && process.env.FAKE_MODE === "soft") {
   return bin;
 }
 
-async function e2e(mode) {
+async function e2e(mode, prompt = "original prompt") {
   const dir = mkdtempSync(join(root, "e2e-"));
   const backlog = join(root, ".claude/backlog/e2e.md");
   writeFileSync(backlog, "# e2e — backlog\nUpdated: 2026-09-20\n\n## Todo\n- ship it\n");
+  writeFileSync(join(root, ".claude/settings.json"), "{}");
   const log = join(dir, "calls.jsonl");
   writeFileSync(log, "");
   const specPath = join(dir, "spec.json");
-  writeFileSync(specPath, JSON.stringify({ id: `e2e-${mode}`, label: "e2e", root, cwd: root, prompt: "original prompt", tasks: [{ slug: "e2e", title: "ship it" }] }));
+  writeFileSync(specPath, JSON.stringify({ id: `e2e-${mode}`, label: "e2e", root, cwd: root, prompt, tasks: [{ slug: "e2e", title: "ship it" }] }));
   const t0 = Date.now();
   // the fake claude inherits process.env, exactly like the real one would
   Object.assign(process.env, {
@@ -213,6 +219,9 @@ test("e2e: rate-limit rejection -> waits for the reset time -> resumes the same 
   // Edit/Write on .claude/** is hard-blocked headless: the ONLY extra allowance is the backlog helper.
   assert.deepEqual(calls[0].args.filter((a, i) => calls[0].args[i - 1] === "--allowed-tools"), [`Bash(node ${R.BACKLOG_CLI} *)`]);
   assert.ok(!calls[0].args.includes("bypassPermissions"));
+  // slim headless context + workspace hooks even though cwd may be a project subdir
+  for (const a of ["--strict-mcp-config", "--disable-slash-commands", R.QUIET_NOTE]) assert.ok(calls[0].args.includes(a), a);
+  assert.equal(calls[0].args[calls[0].args.indexOf("--settings") + 1], join(root, ".claude/settings.json"));
   assert.ok(ms >= 900, `should have waited for the reset (took ${ms}ms)`);
   assert.equal(jobFile.status, "done");
   assert.ok(jobFile.events.some((e) => /five_hour limit/.test(e.msg)));
@@ -256,4 +265,36 @@ test("relay seed prompt tells the agent to use the backlog helper, not Edit/Writ
   const seed = seedForSequentialRun({ slug: "p", tasks: [{ title: "ship it", note: null }], adhoc: false, relay: true });
   assert.ok(seed.includes(`node ${R.BACKLOG_CLI} move`), "helper command with absolute path");
   assert.match(seed, /BLOCKED in headless mode/);
+});
+
+test("describeTool shows the target, not just the tool name", () => {
+  assert.equal(R.describeTool("Read", { file_path: "/a/b/server/launch.mjs" }), "Read: …/server/launch.mjs");
+  assert.equal(R.describeTool("Bash", { command: "npm test", description: "Run tests" }), "Bash: Run tests");
+  assert.equal(R.describeTool("Grep", { pattern: "foo" }), "Grep: foo");
+  assert.equal(R.describeTool("Mystery", { x: 1 }), "Mystery");
+  assert.ok(R.describeTool("Bash", { command: "x".repeat(500) }).length < 110);
+});
+
+test("describeTool redacts credentials (job status is served unauthenticated)", () => {
+  const s = R.describeTool("Bash", { command: "curl -H x API_TOKEN=abc123 http://h" });
+  assert.ok(!s.includes("abc123"));
+});
+
+test("describeEvent flags subagent activity and skips non-assistant events", () => {
+  assert.deepEqual(R.describeEvent({ type: "result" }), []);
+  const out = R.describeEvent({
+    type: "assistant",
+    parent_tool_use_id: "t1",
+    message: { content: [{ type: "text", text: "hi  there" }, { type: "tool_use", name: "Edit", input: { file_path: "x.js" } }] },
+  });
+  assert.equal(out.length, 2);
+  assert.ok(out.every((a) => a.sub));
+  assert.equal(out[0].text, "hi there");
+  assert.equal(out[1].text, "Edit: x.js");
+});
+
+test("e2e: a prompt that mentions a skill keeps slash commands (skills) available", async () => {
+  const { calls } = await e2e("plain", "use the grill-with-docs skill on this");
+  assert.ok(!calls[0].args.includes("--disable-slash-commands"));
+  assert.ok(calls[0].args.includes("--strict-mcp-config"));
 });
