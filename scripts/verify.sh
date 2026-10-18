@@ -5,14 +5,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-port=$(../.claude/scripts/freeport.sh)
+port=$(node -e 'const s=require("net").createServer().listen(0,()=>{console.log(s.address().port);s.close()})')
 fix=$(mktemp -d -t pm-verify)
-mkdir -p "$fix/.claude"/{state,rules,backlog,handoffs,pm,scripts}
-# the fixture is a fake workspace; give it the real harvester (it honors PM_ROOT)
-ln -sf "$(cd .. && pwd)/.claude/scripts/pm-activity.mjs" "$fix/.claude/scripts/pm-activity.mjs"
+mkdir -p "$fix/.claude"/{state,rules,backlog,handoffs,pm}
 
 # fake session transcript at the path the harvester derives from PM_ROOT
-sesc=$(printf '%s' "$fix" | tr '/' '-')
+sesc=$(printf '%s' "$fix" | sed 's/[^a-zA-Z0-9]/-/g')
 sdir="$HOME/.claude/projects/$sesc"
 mkdir -p "$sdir"
 sid="feedface-0000-1111-2222"
@@ -111,6 +109,16 @@ curl -sf -X PUT "$B/api/sessions/feedface-0000-1111-2222" -H content-type:applic
 curl -sf "$B/api/sessions" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(d.inbox.length!==0||d.filed.length!==1)process.exit(1);console.log("filed:",d.filed[0].project)'
 curl -sf "$B/api/projects/hub" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.sessions||d.sessions.length!==1)process.exit(1);console.log("hub.sessions =",d.sessions.length)'
 
+echo "--- Resume block round-trips through the state API and onto the project card"
+curl -sf -X PUT "$B/api/projects/hub/state" -H content-type:application/json -d '{"resume":{"lastResult":"42/50 pass","rerun":"npm test"}}' >/dev/null
+grep -q '^Re-run: npm test$' "$fix/.claude/state/hub.md" || { echo "Resume not written to state file"; exit 1; }
+curl -sf "$B/api/projects" | jn 'const d=JSON.parse(require("fs").readFileSync(0));const h=d.find(p=>p.slug==="hub");if(h.lastResult!=="42/50 pass")process.exit(1);console.log("hub.lastResult =",h.lastResult)'
+
+echo "--- Continue (dryrun; unknown project -> 404)"
+curl -sf -X POST "$B/api/projects/hub/continue" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun)process.exit(1);console.log("continue cmd:",d.cmd.slice(0,40),"…")'
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$B/api/projects/nosuch/continue")
+[ "$code" = "404" ] || { echo "expected 404, got $code"; exit 1; }
+
 echo "--- build-with-claude (dryrun)"
 curl -sf -X POST "$B/api/projects/hub/tasks/0/launch" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||!/claude "\$\(cat /.test(d.cmd))process.exit(1);console.log("launch cmd:",d.cmd.slice(0,60),"…")'
 
@@ -133,7 +141,8 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$B/api/tasks/run-cross" -
 [ "$code" = "409" ] || { echo "expected 409 for stale item, got $code"; exit 1; }
 echo "stale item -> 409"
 
-if [ -f web/dist/index.html ] && [ -f web/verify.mjs ]; then
+# the browser check needs a playwright launcher from the author's outer workspace; skipped without it
+if [ -f web/dist/index.html ] && [ -f web/verify.mjs ] && [ -f ../.claude/scripts/browser.mjs ]; then
   echo "--- browser check"
   PM_URL="$B/" node web/verify.mjs
 fi

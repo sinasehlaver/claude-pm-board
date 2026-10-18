@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,3 +20,10 @@ export const ACTIVITY_FILE = join(PM_DIR, "activity.json");
 export const SESSIONS_FILE = join(PM_DIR, "sessions.json");
 export const SESSION_INDEX_FILE = join(PM_DIR, "session-index.json");
 export const PLANS_DIR = join(process.env.HOME || "", ".claude", "plans");
+
+// Workspace settings (hooks/env) don't load when claude's cwd is a project subfolder;
+// pass them explicitly. Hook commands in this file must use absolute paths.
+export function settingsArgs() {
+  const f = ["settings.json", "settings.local.json"].map((n) => join(CLAUDE, n)).find(existsSync);
+  return f ? ["--settings", f] : [];
+}

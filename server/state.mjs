@@ -1,12 +1,35 @@
-// Parse / serialize .claude/state/<slug>.md — the 40-line status file defined by
+// Parse / serialize .claude/state/<slug>.md — the 50-line status file defined by
 // .claude/knowledge-architecture.md. Format is fixed: an "Updated:" line then four
-// H2 sections in order: Now / Next / Last failure / Blockers.
+// H2 sections in order: Now / Next / Last failure / Blockers, plus an optional
+// trailing "## Resume" section (where to pick the project back up).
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { STATE_DIR } from "./paths.mjs";
 
 const SECTIONS = ["Now", "Next", "Last failure", "Blockers"];
-export const STATE_LINE_CAP = 40;
+export const STATE_LINE_CAP = 50;
+export const STATE_CHAR_CAP = 4000; // snapshot, not a log; agents edit the file directly, so history piles up
+
+// Resume fields <-> their "Label:" in the .md. Written only when any is set, so
+// state files without a Resume block round-trip byte-identically.
+export const RESUME_FIELDS = {
+  lastResult: "Last result",
+  rerun: "Re-run",
+  branch: "Branch/variant",
+  artifacts: "Artifacts",
+};
+
+function parseResume(section) {
+  const out = Object.fromEntries(Object.keys(RESUME_FIELDS).map((k) => [k, ""]));
+  for (const line of (section || "").split("\n")) {
+    const m = line.match(/^([^:]+):\s*(.*?)\s*$/);
+    const key = m && Object.keys(RESUME_FIELDS).find((k) => RESUME_FIELDS[k] === m[1].trim());
+    if (key) out[key] = m[2];
+  }
+  return out;
+}
+
+const oneLine = (v) => String(v ?? "").replace(/\s*\n\s*/g, " ").trim();
 
 function splitSections(body) {
   const out = {};
@@ -61,6 +84,7 @@ export function parseState(text, slug) {
     next,
     lastFailure: (sec["Last failure"] || "none").trim() || "none",
     blockers: (sec["Blockers"] || "none").trim() || "none",
+    resume: parseResume(sec["Resume"]),
   };
 }
 
@@ -83,10 +107,19 @@ export function serializeState(s, { refreshDate = false } = {}) {
     s.blockers || "none",
     "",
   ];
+  const resume = s.resume || {};
+  if (Object.keys(RESUME_FIELDS).some((k) => oneLine(resume[k])))
+    lines.push(
+      "## Resume",
+      ...Object.entries(RESUME_FIELDS).map(([k, label]) => `${label}: ${oneLine(resume[k])}`),
+      "",
+    );
   const text = lines.join("\n");
   const count = text.split("\n").length;
   if (count > STATE_LINE_CAP)
     throw new Error(`state file exceeds ${STATE_LINE_CAP}-line cap (${count})`);
+  if (text.length > STATE_CHAR_CAP)
+    throw new Error(`state file exceeds ${STATE_CHAR_CAP}-char cap (${text.length})`);
   return text;
 }
 

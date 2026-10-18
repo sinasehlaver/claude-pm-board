@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToSlug, guessProject } from "../../.claude/scripts/pm-activity.mjs";
 
 // ---- attribution (pure, from the harvester) ----------------------------
-test("pathToSlug maps abs + relative paths", () => {
+// harvest.mjs pulls in paths.mjs, which reads PM_ROOT at import time: import it inside the tests (PM_ROOT is set below)
+test("pathToSlug maps abs + relative paths", async () => {
+  const { pathToSlug } = await import("./harvest.mjs");
   const slugs = new Set(["pm", "hub"]);
   assert.equal(pathToSlug("/root/pm/web/x.js", slugs, "/root"), "pm");
   assert.equal(pathToSlug("hub/server/a.mjs", slugs), "hub");
@@ -15,7 +16,8 @@ test("pathToSlug maps abs + relative paths", () => {
   assert.equal(pathToSlug("/root/unknownproj/x", slugs, "/root"), null);
 });
 
-test("guessProject ranking: cwd-slug > most-touched > keyword > null", () => {
+test("guessProject ranking: cwd-slug > most-touched > keyword > null", async () => {
+  const { guessProject } = await import("./harvest.mjs");
   const slugs = new Set(["pm", "hub", "checker"]);
   assert.equal(guessProject({ cwd: "/x/hub", hits: new Map(), slugs }), "hub");
   assert.equal(

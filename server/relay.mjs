@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseBacklog } from "./backlog.mjs";
 import { markPrompt } from "./tokens.mjs";
+import { settingsArgs } from "./paths.mjs";
 
 export const relayDir = (root) => join(root, ".claude", "pm", "relay");
 
@@ -257,6 +258,7 @@ function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
     "--disallowed-tools", "Bash(git *)",
     "--allowed-tools", `Bash(node ${BACKLOG_CLI} *)`,
   ];
+  args.push(...settingsArgs());
   if (spec.modelArg) args.push("--model", spec.modelArg);
   if (resumeId) args.push("--resume", resumeId);
   const child = spawn(cfg.claudeBin, args, {

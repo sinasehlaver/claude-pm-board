@@ -1,5 +1,5 @@
 // Parse / serialize .claude/backlog/<slug>.md — the richer task list that doesn't
-// fit the 40-line state cap. Sections are states; one "- " bullet per task; an
+// fit the 50-line state cap. Sections are states; one "- " bullet per task; an
 // optional trailing "@seq" flag (part of the "Run @seq" orchestrator run), an
 // optional trailing "p1|p2|p3", an optional trailing "(YYYY-MM-DD)" on done items,
 // and an indented line is the preceding task's note. Canonical trailing order is

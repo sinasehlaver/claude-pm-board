@@ -31,10 +31,16 @@ test("canonical round-trips byte-identical", () => {
   assert.equal(serializeState(parseState(CANON, "hub")), CANON);
 });
 
-test("serialize throws past the 40-line cap", () => {
+test("serialize throws past the 50-line cap", () => {
   const s = parseState(CANON, "hub");
   s.next = Array.from({ length: 40 }, (_, i) => `item ${i}`);
-  assert.throws(() => serializeState(s), /40-line cap/);
+  assert.throws(() => serializeState(s), /50-line cap/);
+});
+
+test("serialize throws past the 4000-char cap", () => {
+  const s = parseState(CANON, "hub");
+  s.next = Array.from({ length: 20 }, () => "x".repeat(300));
+  assert.throws(() => serializeState(s), /4000-char cap/);
 });
 
 test("missing sections default to 'none'", () => {
@@ -72,4 +78,32 @@ test("Now headline + detail bullets parse into newline-joined lines, markers str
 
 test("multi-line Now round-trips byte-identical", () => {
   assert.equal(serializeState(parseState(CANON_MULTILINE, "hub")), CANON_MULTILINE);
+});
+
+const WITH_RESUME = CANON + `
+## Resume
+Last result: 42/50 pass, p50 3.1s
+Re-run: python bench.py --variant b
+Branch/variant: f-fix-2 / opus
+Artifacts: reports/R03.md, nb/ab.ipynb
+`;
+
+test("Resume block parses, round-trips byte-identical, and old files get an empty one", () => {
+  const s = parseState(WITH_RESUME, "hub");
+  assert.deepEqual(s.resume, {
+    lastResult: "42/50 pass, p50 3.1s",
+    rerun: "python bench.py --variant b",
+    branch: "f-fix-2 / opus",
+    artifacts: "reports/R03.md, nb/ab.ipynb",
+  });
+  assert.equal(serializeState(s), WITH_RESUME);
+  assert.deepEqual(parseState(CANON, "hub").resume, { lastResult: "", rerun: "", branch: "", artifacts: "" });
+});
+
+test("Resume values are flattened to one line; a partly-filled block keeps all four labels", () => {
+  const s = parseState(CANON, "hub");
+  s.resume = { lastResult: "ok\n## Blockers\nfake", rerun: "", branch: "", artifacts: "" };
+  const out = serializeState(s);
+  assert.match(out, /Last result: ok ## Blockers fake\nRe-run: \nBranch\/variant: \nArtifacts: \n/);
+  assert.equal(parseState(out, "hub").blockers, "none");
 });

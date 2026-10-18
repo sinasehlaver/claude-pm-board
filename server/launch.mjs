@@ -5,7 +5,7 @@ import { writeFileSync, existsSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PM_ROOT } from "./paths.mjs";
+import { PM_ROOT, settingsArgs } from "./paths.mjs";
 import { newRunId, markPrompt, registerRun } from "./tokens.mjs";
 import { relayDir, specPathFor, writeJson, pruneRelay, BACKLOG_CLI } from "./relay.mjs";
 
@@ -20,14 +20,30 @@ const CLEAN_ENV = "unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE CLAUDE_CODE_ENTRYP
 // Open a Mac terminal running `inner` (a shell command line). iTerm's `command`
 // param does NOT go through a shell (naive execvp tokenization — `&&` breaks it),
 // so create the window then `write text`, which the session's shell evaluates.
-function termOsa(rawInner) {
+// `bg` = "#rrggbb" window tint (the project color); anything else is ignored.
+function termOsa(rawInner, bg) {
   const inner = CLEAN_ENV + rawInner;
   const iterm = existsSync("/Applications/iTerm.app");
+  const rgb = /^#[0-9a-f]{6}$/i.test(bg || "") ? [1, 3, 5].map((i) => parseInt(bg.slice(i, i + 2), 16) * 257).join(", ") : "";
   const osa = iterm
-    ? `tell application "iTerm"\n  activate\n  create window with default profile\n  tell current session of current window to write text ${osaStr(inner)}\nend tell`
-    : `tell application "Terminal"\n  activate\n  do script ${osaStr(inner)}\nend tell`;
+    ? `tell application "iTerm"\n  activate\n  create window with default profile\n  tell current session of current window\n${rgb ? `    set background color to {${rgb}}\n` : ""}    write text ${osaStr(inner)}\n  end tell\nend tell`
+    : `tell application "Terminal"\n  activate\n  set t to do script ${osaStr(inner)}\n${rgb ? `  set background color of t to {${rgb}}\n` : ""}end tell`;
   return { osa, term: iterm ? "iterm" : "terminal" };
 }
+
+// How a session leaves the project resumable: the state file's `## Resume` block
+// (see server/state.mjs). The unattended relay can't edit .claude/, so PACING_RELAY
+// points it at backlog-cli.mjs instead.
+const RESUME_NOTE =
+  "RESUME BLOCK — before finishing, record in the `## Resume` section of the project's state file " +
+  "where to pick up: Last result (the last test/benchmark outcome, with the numbers), Re-run (the " +
+  "exact command to repeat it), Branch/variant, Artifacts (report/notebook/results paths).";
+
+// Context line for seeds: state is small, rules files may be long change logs, so
+// read only the headings and the sections that matter. Skip the backlog's Done section.
+const readContext = (slug) =>
+  `First read .claude/state/${slug}.md (incl. its Resume section), then \`grep -n "^#" .claude/rules/${slug}.md\` ` +
+  "and read only the rules sections relevant to this work (not the whole file, not the backlog's Done section).";
 
 export function seedForTask({ slug, title, note, adhoc }) {
   if (slug === "ideas") return seedForIdeaResearch({ title, note });
@@ -38,8 +54,10 @@ export function seedForTask({ slug, title, note, adhoc }) {
     out.push(`Ad-hoc item (no code dir yet). When done, mark it Done in .claude/backlog/${slug}.md.`);
   else
     out.push(
-      `First read .claude/rules/${slug}.md and .claude/state/${slug}.md for context.`,
+      readContext(slug),
       `When done, update .claude/state/${slug}.md and move this task to Done in .claude/backlog/${slug}.md.`,
+      "",
+      RESUME_NOTE,
     );
   out.push("", SECURITY_NOTE);
   return out.join("\n");
@@ -177,6 +195,22 @@ export function seedForDoctorFinding(f) {
   ].join("\n");
 }
 
+// Seed prompt for a project's "Continue" button: an interactive session that re-orients
+// from rules + state + Resume, then waits for the go-ahead. Never auto-runs the Re-run
+// command — benchmarks/evals here can hit paid APIs.
+export function seedForContinue({ slug, adhoc }) {
+  const out = [`I'm picking up "${slug}" where I left off.`, ""];
+  if (!adhoc) out.push(`Read .claude/rules/${slug}.md and .claude/state/${slug}.md first (incl. its Resume section).`);
+  else out.push(`Read .claude/state/${slug}.md and .claude/backlog/${slug}.md first.`);
+  out.push(
+    "Then tell me in <=6 lines: what Now says, the last result, the Re-run command and branch/variant,",
+    "and your proposed first step. Check `git status` / `git log -5` in the project dir for anything",
+    "newer than the state file. Do NOT run the Re-run command or anything that could call a paid API",
+    "until I say go. " + RESUME_NOTE,
+  );
+  return out.join("\n");
+}
+
 // Shared run note for any orchestrator prompt that fans out to several
 // WebSearch/build-heavy subagents in one one-shot session. Used by both the
 // normal-project "Run @seq" orchestrator and the Ideas-promotion one.
@@ -196,8 +230,10 @@ const PACING_RELAY = [
   "anything under `.claude/` (backlog, state) is BLOCKED in headless mode and will fail —",
   "do not attempt it. Use this one allowed helper instead (run from any directory):",
   `  node ${BACKLOG_CLI} move <slug> <Todo|Doing|Blocked|Done> "<exact title>" ["note"]`,
-  `  node ${BACKLOG_CLI} add <slug> "<title>"`,
+  `  node ${BACKLOG_CLI} add <slug> "<title>" ["note"]`,
   `  node ${BACKLOG_CLI} state <slug> now "<headline>" ["detail" ...]`,
+  `  node ${BACKLOG_CLI} state <slug> resume <last-result|re-run|branch|artifacts> "<value>"`,
+  "(record the Resume block that way: last test/benchmark result, re-run command, branch, artifact paths)",
   "If a todo needs a denied command or a decision only the user can make, `move` it to",
   "Blocked with a one-line note saying why, and go on to the next.",
   "",
@@ -234,7 +270,7 @@ export function seedForSequentialRun({ slug, tasks, adhoc, mode = "seq", relay =
   ];
   if (!adhoc)
     out.push(
-      `First read .claude/rules/${slug}.md and .claude/state/${slug}.md for context.`,
+      readContext(slug),
       "",
     );
   out.push(
@@ -255,6 +291,7 @@ export function seedForSequentialRun({ slug, tasks, adhoc, mode = "seq", relay =
     adhoc
       ? `When all todos are done or blocked, update .claude/backlog/${slug}.md and summarise what shipped, what was deferred, and why.`
       : `When all todos are done or blocked, update .claude/state/${slug}.md and .claude/backlog/${slug}.md, then summarise what shipped, what was deferred, and why.`,
+    ...(adhoc || relay ? [] : ["", RESUME_NOTE]),
   );
   return out.join("\n");
 }
@@ -285,7 +322,7 @@ export function seedForCrossProjectRun({ tasks, relay = false }) {
     list,
     "",
     "ORCHESTRATION:",
-    "- Before touching a project, read its .claude/rules/<slug>.md and .claude/state/<slug>.md",
+    "- Before touching a project, read its .claude/state/<slug>.md, then only the relevant sections of .claude/rules/<slug>.md (grep -n \"^#\" first)",
     "  (skip whichever doesn't exist - an ad-hoc project has no code dir yet).",
     "- Todos in DIFFERENT projects are disjoint: run them in parallel via subagents.",
     "  Todos in the SAME project run sequentially unless clearly disjoint (different",
@@ -296,7 +333,8 @@ export function seedForCrossProjectRun({ tasks, relay = false }) {
     "  project's .claude/backlog/<slug>.md (match the bullet by its title; the todo's",
     "  position in the file may have shifted). Leave a todo in place, with a note, if it",
     "  turns out blocked.",
-    "- When a project's todos are finished, update its .claude/state/<slug>.md.",
+    "- When a project's todos are finished, update its .claude/state/<slug>.md, including its",
+    "  `## Resume` section (last test/benchmark result, re-run command, branch/variant, artifact paths).",
     "",
     relay ? PACING_RELAY : RUN_NOTE,
     "",
@@ -392,10 +430,10 @@ function seedForIdeaPromotion({ tasks, relay = false }) {
 // Open a Mac terminal running an arbitrary command in `cwd`. Same osascript /
 // iTerm-else-Terminal path as launchClaude; `PM_LAUNCH_DRYRUN=1` returns the
 // command instead of spawning. Used by the relay launch.
-export function launchCommand({ cwd, inner: cmd }) {
+export function launchCommand({ cwd, inner: cmd, bg }) {
   const dir = cwd && existsSync(cwd) ? cwd : PM_ROOT;
   const inner = `cd ${shq(dir)} && ${cmd}`;
-  const { osa, term } = termOsa(inner);
+  const { osa, term } = termOsa(inner, bg);
   if (DRYRUN) return Promise.resolve({ dryrun: true, term, cmd: inner, osa });
   return new Promise((resolve, reject) =>
     execFile("osascript", ["-e", osa], (err) => (err ? reject(err) : resolve({ term }))),
@@ -435,12 +473,14 @@ export function launchRelay({ cwd, prompt, label, tasks }) {
   }).then((r) => ({ ...r, relay: true, job: id }));
 }
 
+const settingsFlags = () => settingsArgs().map((a) => shq(a) + " ").join("");
+
 // `todos` ([{slug,title}]) = the todos this session works, for per-todo token totals.
-export function launchClaude({ cwd, prompt, resumeId, todos }) {
+export function launchClaude({ cwd, prompt, resumeId, todos, bg }) {
   const dir = cwd && existsSync(cwd) ? cwd : PM_ROOT;
   let inner;
   if (resumeId) {
-    inner = `cd ${shq(dir)} && claude --resume ${shq(resumeId)}`;
+    inner = `cd ${shq(dir)} && claude ${settingsFlags()}--resume ${shq(resumeId)}`;
   } else {
     const seed = join(mkdtempSync(join(tmpdir(), "pm-seed-")), "prompt.txt");
     let text = prompt || "";
@@ -450,9 +490,9 @@ export function launchClaude({ cwd, prompt, resumeId, todos }) {
       text = markPrompt(text, id);
     }
     writeFileSync(seed, text);
-    inner = `cd ${shq(dir)} && claude "$(cat ${shq(seed)})"`;
+    inner = `cd ${shq(dir)} && claude ${settingsFlags()}"$(cat ${shq(seed)})"`;
   }
-  const { osa, term } = termOsa(inner);
+  const { osa, term } = termOsa(inner, bg);
   if (DRYRUN) return Promise.resolve({ dryrun: true, term, cmd: inner, osa });
   return new Promise((resolve, reject) =>
     execFile("osascript", ["-e", osa], (err) => (err ? reject(err) : resolve({ term }))),

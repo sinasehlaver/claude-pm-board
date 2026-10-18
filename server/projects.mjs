@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { PM_ROOT, RULES_DIR, STATE_DIR, HANDOFFS_DIR } from "./paths.mjs";
+import { RULES_DIR, STATE_DIR, HANDOFFS_DIR } from "./paths.mjs";
+import { kindOf, entryDir, readEntries } from "./entries.mjs";
 import { readState } from "./state.mjs";
 import { readBacklog, listBacklogSlugs } from "./backlog.mjs";
 import { readActivity, lastTouched, matchesProject } from "./activity.mjs";
@@ -26,12 +27,14 @@ export async function discoverSlugs() {
     mdSlugs(STATE_DIR),
     listBacklogSlugs(),
   ]);
-  return { all: [...new Set([...rules, ...state, ...backlog])].sort(), rules };
+  // A project = a state or backlog file. rules/*.md alone does not make one: in a shared
+  // workspace those are path-scoped guidance docs (evaluation.md, notebooks.md, …).
+  return { all: [...new Set([...state, ...backlog])].sort(), rules };
 }
 
 async function hasDir(slug) {
   try {
-    return (await stat(join(PM_ROOT, slug))).isDirectory();
+    return (await stat(entryDir(slug))).isDirectory();
   } catch {
     return false;
   }
@@ -60,8 +63,10 @@ async function newestHandoff(slug) {
   }
 }
 
-export async function listProjects() {
-  const { all, rules } = await discoverSlugs();
+// kind: "project" (default; every slug without an entry), "benchmark", "tool", or "all".
+export async function listProjects(kind = "project") {
+  const { all: every, rules } = await discoverSlugs();
+  const all = kind === "all" ? every : every.filter((s) => kindOf(s) === kind);
   const activity = await readActivity();
   const rulesSet = new Set(rules);
   return Promise.all(
@@ -78,9 +83,13 @@ export async function listProjects() {
       return {
         slug,
         title: (await ruleTitle(slug)) || slug,
+        kind: kindOf(slug),
         adhoc: slug !== "ideas" && !rulesSet.has(slug) && !adhocDir,
         pinned: slug === "ideas",
         status: st ? st.now : "",
+        next: st && st.next.length ? st.next[0] : "",
+        lastResult: st ? st.resume.lastResult : "",
+        updated: st ? st.updated : "",
         blockers: st ? st.blockers : "none",
         openCount: open,
         blocked: Boolean(blocked),
@@ -103,6 +112,8 @@ export async function getProject(slug) {
   return {
     slug,
     title: (await ruleTitle(slug)) || slug,
+    kind: kindOf(slug),
+    path: readEntries()[slug]?.path || null,
     adhoc: slug !== "ideas" && !(await hasDir(slug)) && !(await ruleTitle(slug)),
     pinned: slug === "ideas",
     state: st,

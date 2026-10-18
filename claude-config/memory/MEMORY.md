@@ -1,0 +1,3 @@
+- [Ask via AskUserQuestion](ask-questions-via-askuserquestion.md) — never prose/`needs input:`; relay from headless agents
+- [Board project plan](pm-board-plan.md) — the board is its own project: one todo per phase, steps in phases/*.md, never start a phase unprompted
+- [Board todo style](board-todo-style.md) — human voice, one todo per phase, steps in phases md

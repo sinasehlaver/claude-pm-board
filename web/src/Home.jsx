@@ -5,6 +5,7 @@ import LatestTodos from "./LatestTodos.jsx";
 import { RelayStrip } from "./relay.jsx";
 import { costFor, tokensFor } from "./pricing.js";
 import { loadUnit, REFRESH_KEY, loadRefreshSec, RefreshSelect } from "./usageSettings.jsx";
+import { loadColor, slugStyle } from "./projectColor.jsx";
 
 const k = (n) => (n == null ? "—" : n >= 1000 ? Math.round(n / 1000).toLocaleString() + "k" : String(Math.round(n)));
 const usd = (n) => (n == null ? "—" : "$" + n.toFixed(n < 1 ? 3 : 2));
@@ -17,6 +18,37 @@ function burnFigure(rows, unit) {
 }
 
 const HIDDEN_KEY = "pm.hiddenSlugs";
+const SORT_KEY = "pm.sort";
+const TAB_KEY = "pm.tab";
+const TOOLS_OPEN_KEY = "pm.toolsGroupOpen";
+const TABS = [["project", "Projects"], ["tool", "Tools"]];
+const STALE_DAYS = 7;
+
+// remembered UI pref; localStorage can throw (private window), so fall back
+function loadPref(key, ok, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    return ok(v) ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+const savePref = (key, v) => {
+  try {
+    localStorage.setItem(key, v);
+  } catch {}
+};
+
+// when a project was last touched: harvested activity, else the state file's Updated date
+const touched = (p) => p.lastActivity || p.updated || null;
+const ageDays = (iso) => (iso ? (Date.now() - Date.parse(iso)) / 86400e3 : Infinity);
+const byRecent = (a, b) => String(touched(b) || "").localeCompare(String(touched(a) || ""));
+const SORTS = {
+  focus: ["Blocked, then recent", (a, b) => Number(b.blocked) - Number(a.blocked) || byRecent(a, b)],
+  recent: ["Most recent", byRecent],
+  stale: ["Stalest first", (a, b) => byRecent(b, a)],
+  name: ["A–Z", (a, b) => a.title.localeCompare(b.title)],
+};
 
 function loadHidden() {
   try {
@@ -28,8 +60,12 @@ function loadHidden() {
   }
 }
 
-export default function Home({ projects, inboxCount, onOpen, onSessions, onUsage, onDoctor, reload }) {
+export default function Home({ projects, inboxCount, selfSlug, onOpen, onSessions, onUsage, onDoctor, onEnvs, reload }) {
   const [idea, setIdea] = useState("");
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState(() => loadPref(SORT_KEY, (v) => v in SORTS, "focus"));
+  const [tab, setTab] = useState(() => loadPref(TAB_KEY, (v) => TABS.some(([k]) => k === v), "project"));
+  const [toolsOpen, setToolsOpen] = useState(() => loadPref(TOOLS_OPEN_KEY, (v) => v === "1", "0") === "1");
   const [hidden, setHidden] = useState(loadHidden);
   const [showFilter, setShowFilter] = useState(false);
   const [burn, setBurn] = useState(null);
@@ -84,46 +120,101 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onUsage
     }
   }
 
+  function setAllHidden(slugs, hide) {
+    setHidden((prev) => {
+      const next = hide ? [...new Set([...prev, ...slugs])] : prev.filter((s) => !slugs.includes(s));
+      localStorage.setItem(HIDDEN_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  const changeTab = (v) => (setTab(v), savePref(TAB_KEY, v));
+  const changeSort = (v) => (setSort(v), savePref(SORT_KEY, v));
+  const toggleTools = () => (setToolsOpen(!toolsOpen), savePref(TOOLS_OPEN_KEY, toolsOpen ? "0" : "1"));
+
+  // Projects tab = projects, plus a collapsible group for benchmark/tool entries (entries.json).
+  // Tools tab = in-app tools (Env Manager). The self project (PM_SELF_SLUG) lives in the side pane.
   const sorted = (projects || [])
-    .slice()
-    .sort(
-      (a, b) =>
-        Number(b.pinned) - Number(a.pinned) ||
-        Number(b.blocked) - Number(a.blocked) ||
-        String(b.lastActivity || "").localeCompare(String(a.lastActivity || "")),
+    .filter((p) => p.slug !== selfSlug)
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || SORTS[sort][1](a, b));
+  const q = query.trim().toLowerCase();
+  // pinned projects (e.g. ideas) always show, regardless of filter and search
+  const match = (p) =>
+    p.pinned ||
+    (!hidden.includes(p.slug) &&
+      (!q || [p.slug, p.title, p.status, p.next, p.lastResult].some((t) => (t || "").toLowerCase().includes(q))));
+  const visible = tab === "project" ? sorted.filter((p) => (p.kind || "project") === "project" && match(p)) : [];
+  const entries = tab === "project" ? sorted.filter((p) => (p.kind || "project") !== "project" && match(p)) : [];
+
+  const renderCard = (p) => {
+    const when = touched(p);
+    const stale = !p.pinned && ageDays(when) > STALE_DAYS;
+    return (
+      <li
+        key={p.slug}
+        className={"card pc has-pc" + (p.blocked ? " is-blocked" : "")}
+        style={slugStyle(p.slug, loadColor(p.slug))}
+        onClick={() => onOpen(p.slug)}
+      >
+        <div className="card-top">
+          <span className="title">
+            {p.pinned ? "💡 " : ""}
+            {p.title}
+            {p.adhoc && <span className="tag">ad-hoc</span>}
+            {p.pinned && (
+              <Help text="Your always-on-top ideas inbox — a catch-all backlog for anything not tied to a specific project yet. Never hidden by the filter." />
+            )}
+          </span>
+          {p.blocked && <span className="dot" title="blocked" />}
+        </div>
+        <div className="status clamp">{p.status || <em className="muted">no status</em>}</div>
+        {p.lastResult && (
+          <div className="card-line">
+            <span className="chip">last result</span>
+            <span className="card-line-text">{p.lastResult}</span>
+          </div>
+        )}
+        {p.next && (
+          <div className="card-line">
+            <span className="chip chip-quiet">next</span>
+            <span className="card-line-text">{p.next}</span>
+          </div>
+        )}
+        <div className="meta">
+          <span>{p.openCount} open</span>
+          <span className={stale ? "stale" : ""} title={stale ? `untouched for over ${STALE_DAYS} days` : undefined}>
+            {ago(when)}
+          </span>
+        </div>
+      </li>
     );
-  // pinned projects (e.g. ideas) always show, regardless of filter
-  const visible = sorted.filter((p) => p.pinned || !hidden.includes(p.slug));
+  };
 
   return (
     <div className="screen">
       <header className="bar">
-        <h1>Projects</h1>
+        <nav className="tabs">
+          {TABS.map(([k, label]) => (
+            <button key={k} className={"tab" + (tab === k ? " active" : "")} onClick={() => changeTab(k)}>
+              <h1>{label}</h1>
+            </button>
+          ))}
+        </nav>
         <div className="bar-actions">
-          <span className="bar-item">
-            <button className="link" onClick={onUsage}>
-              Usage
-            </button>
-            <Help text="Token/cost burn rate across every Claude Code session on this machine, and your account's rate-limit ceiling." />
-          </span>
-          <span className="bar-item">
-            <button className="link" onClick={onDoctor}>
-              Doctor
-            </button>
-            <Help text="Routine, LLM-free scan of Claude Code transcripts: where errors and token spend concentrate, plus suggested fixes (suggestions only)." />
-          </span>
-          <span className="bar-item">
-            <button className="link" onClick={onSessions}>
-              Sessions{inboxCount ? <span className="badge">{inboxCount}</span> : null}
-            </button>
-            <Help text="Recent Claude Code conversations, sorted into ones you haven't filed yet (the inbox) and ones already linked to a project." />
-          </span>
-          <span className="bar-item">
-            <button className={"link" + (hidden.length ? " active" : "")} onClick={() => setShowFilter(true)}>
-              Filter{hidden.length ? <span className="badge">{hidden.length}</span> : null}
-            </button>
-            <Help text="Hide projects you don't want cluttering this list. Hidden projects still exist — you're just not seeing them here." />
-          </span>
+          <details className="help-menu">
+            <summary className="link">Help{inboxCount ? <span className="badge">{inboxCount}</span> : null}</summary>
+            <div className="help-menu-list">
+              <button className="link" onClick={onSessions} title="Recent Claude Code conversations: unfiled inbox vs linked to a project">
+                Sessions{inboxCount ? <span className="badge">{inboxCount}</span> : null}
+              </button>
+              <button className="link" onClick={onDoctor} title="LLM-free scan of transcripts: where errors and token spend concentrate">
+                Doctor
+              </button>
+              <button className="link" onClick={onUsage} title="Token/cost burn rate across all sessions, and rate-limit ceiling">
+                Usage
+              </button>
+            </div>
+          </details>
           <button className="add" onClick={addAdhoc} title="add an ad-hoc project">
             +
           </button>
@@ -135,6 +226,7 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onUsage
           projects={sorted}
           hidden={hidden}
           onToggle={toggleHidden}
+          onAll={setAllHidden}
           onClose={() => setShowFilter(false)}
         />
       )}
@@ -152,6 +244,28 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onUsage
           />
         </div>
       </form>
+
+      {tab === "project" && (
+        <div className="find">
+          <input
+            type="search"
+            placeholder="Search projects…"
+            aria-label="Search projects"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          <select value={sort} onChange={(e) => changeSort(e.target.value)} aria-label="Sort projects">
+            {Object.entries(SORTS).map(([k, [label]]) => (
+              <option key={k} value={k}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <button className={"link" + (hidden.length ? " active" : "")} onClick={() => setShowFilter(true)} title="Hide projects you don't want in this list (nothing is deleted)">
+            Filter{hidden.length ? <span className="badge">{hidden.length}</span> : null}
+          </button>
+        </div>
+      )}
 
       {burn && (
         <div className="burn-strip-row">
@@ -176,28 +290,31 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onUsage
         <p className="muted pad">Loading…</p>
       ) : (
         <ul className="cards">
-          {visible.map((p) => (
-            <li key={p.slug} className="card" onClick={() => onOpen(p.slug)}>
+          {tab === "tool" && (
+            <li className="card pc has-pc" style={slugStyle("env-manager")} onClick={onEnvs}>
               <div className="card-top">
-                <span className="title">
-                  {p.pinned ? "💡 " : ""}
-                  {p.title}
-                  {p.adhoc && <span className="tag">ad-hoc</span>}
-                  {p.pinned && (
-                    <Help text="Your always-on-top ideas inbox — a catch-all backlog for anything not tied to a specific project yet. Never hidden by the filter." />
-                  )}
-                </span>
-                {p.blocked && <span className="dot" title="blocked" />}
+                <span className="title">Env Manager</span>
               </div>
-              <div className="status clamp">
-                {p.status || <em className="muted">no status</em>}
-              </div>
-              <div className="meta">
-                <span>{p.openCount} open</span>
-                <span>{ago(p.lastActivity)}</span>
-              </div>
+              <div className="status clamp">Every live .env var in the workspace with masked values; update one (e.g. a new API key) across all files at once, with a backup of each file.</div>
             </li>
-          ))}
+          )}
+          {visible.map(renderCard)}
+          {entries.length > 0 && (
+            <li
+              className="tools-group-head"
+              onClick={toggleTools}
+              role="button"
+              tabIndex={0}
+              aria-expanded={toolsOpen}
+              onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && toggleTools()}
+            >
+              <span className={`chevron${toolsOpen ? " open" : ""}`}>▸</span> benchmarks &amp; tools <span className="muted">({entries.length})</span>
+            </li>
+          )}
+          {toolsOpen && entries.map(renderCard)}
+          {tab === "project" && !visible.length && !entries.length && (
+            <li className="empty">{sorted.length ? "No match." : "Nothing here yet. Press + to add a project."}</li>
+          )}
         </ul>
       )}
 
@@ -206,7 +323,7 @@ export default function Home({ projects, inboxCount, onOpen, onSessions, onUsage
   );
 }
 
-function FilterSheet({ projects, hidden, onToggle, onClose }) {
+function FilterSheet({ projects, hidden, onToggle, onAll, onClose }) {
   const pickable = projects.filter((p) => !p.pinned);
   return (
     <div className="sheet-backdrop" onClick={onClose}>
@@ -221,6 +338,12 @@ function FilterSheet({ projects, hidden, onToggle, onClose }) {
           </button>
         </div>
         {pickable.length ? (
+          <>
+          <div className="block-head">
+            <button className="link" onClick={() => onAll(pickable.map((p) => p.slug), false)}>Select all</button>
+            <button className="link" onClick={() => onAll(pickable.map((p) => p.slug), true)}>Deselect all</button>
+            <span className="muted">{pickable.filter((p) => !hidden.includes(p.slug)).length}/{pickable.length} shown</span>
+          </div>
           <ul className="filter-list">
             {pickable.map((p) => (
               <li key={p.slug} className="filter-row" onClick={() => onToggle(p.slug)}>
@@ -229,6 +352,7 @@ function FilterSheet({ projects, hidden, onToggle, onClose }) {
               </li>
             ))}
           </ul>
+          </>
         ) : (
           <p className="muted">No projects to filter.</p>
         )}

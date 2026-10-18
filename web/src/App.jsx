@@ -5,6 +5,7 @@ import Project from "./Project.jsx";
 import Sessions from "./Sessions.jsx";
 import Usage from "./Usage.jsx";
 import Doctor from "./Doctor.jsx";
+import Envs from "./Envs.jsx";
 import Help from "./Help.jsx";
 
 const THEME_KEY = "pm.theme";
@@ -40,6 +41,7 @@ function ThemeToggle() {
 //   "/sessions"        -> sessions
 //   "/usage"           -> usage
 //   "/doctor"          -> doctor
+//   "/envs"            -> env manager
 //   "/project/<slug>"  -> project view for slug
 function parsePath(pathname) {
   const parts = pathname.split("/").filter(Boolean);
@@ -47,6 +49,7 @@ function parsePath(pathname) {
   if (parts[0] === "sessions") return { view: "sessions", sel: null };
   if (parts[0] === "usage") return { view: "usage", sel: null };
   if (parts[0] === "doctor") return { view: "doctor", sel: null };
+  if (parts[0] === "envs") return { view: "envs", sel: null };
   return { view: "home", sel: null };
 }
 function pathFor(view, sel) {
@@ -54,6 +57,7 @@ function pathFor(view, sel) {
   if (view === "sessions") return "/sessions";
   if (view === "usage") return "/usage";
   if (view === "doctor") return "/doctor";
+  if (view === "envs") return "/envs";
   return "/";
 }
 
@@ -66,7 +70,20 @@ export default function App() {
   const [detail, setDetail] = useState(null);
   const fromPopstate = useRef(false);
 
-  const loadList = useCallback(() => get("/projects").then(setProjects), []);
+  const [selfSlug, setSelfSlug] = useState(null); // PM_SELF_SLUG: the board's own project, shown in a side pane
+  const [pmOpen, setPmOpen] = useState(false);
+  const [pmDetail, setPmDetail] = useState(null);
+
+  const loadList = useCallback(() => get("/projects?kind=all").then(setProjects), []);
+  const loadPm = useCallback(() => selfSlug && get("/projects/" + selfSlug).then(setPmDetail), [selfSlug]);
+
+  useEffect(() => {
+    get("/health").then((h) => setSelfSlug(h.self || null)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (pmOpen) loadPm();
+  }, [pmOpen, loadPm]);
   const loadSessions = useCallback(() => get("/sessions").then(setSessions), []);
   const loadDetail = useCallback((s) => get("/projects/" + s).then(setDetail), []);
 
@@ -86,8 +103,9 @@ export default function App() {
         loadList();
         loadSessions();
         if (sel) loadDetail(sel);
+        if (pmOpen) loadPm();
       }),
-    [sel, loadList, loadSessions, loadDetail],
+    [sel, pmOpen, loadList, loadSessions, loadDetail, loadPm],
   );
 
   // back/forward: restore {view, sel} from the URL the browser navigated to
@@ -132,14 +150,18 @@ export default function App() {
     <Usage onBack={() => setView("home")} />
   ) : view === "doctor" ? (
     <Doctor onBack={() => setView("home")} />
+  ) : view === "envs" ? (
+    <Envs onBack={() => setView("home")} />
   ) : (
     <Home
       projects={projects}
       inboxCount={sessions.inbox.length}
+      selfSlug={selfSlug}
       onOpen={setSel}
       onSessions={() => setView("sessions")}
       onUsage={() => setView("usage")}
       onDoctor={() => setView("doctor")}
+      onEnvs={() => setView("envs")}
       reload={loadList}
     />
   );
@@ -154,6 +176,16 @@ export default function App() {
         />
       </div>
       {body}
+      {selfSlug && (
+        <button className={"pm-pane-toggle" + (pmOpen ? " on" : "")} aria-pressed={pmOpen} onClick={() => setPmOpen(!pmOpen)} title={`${selfSlug}: its todos and state, open next to whatever you are doing`}>
+          {selfSlug}
+        </button>
+      )}
+      {selfSlug && pmOpen && (
+        <aside className="pm-pane">
+          <Project slug={selfSlug} data={pmDetail} projects={projects || []} onBack={() => setPmOpen(false)} reload={loadPm} />
+        </aside>
+      )}
     </>
   );
 }

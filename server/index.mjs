@@ -1,17 +1,20 @@
 import express from "express";
-import { execFile } from "node:child_process";
 import { existsSync, watch, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PM_ROOT, CLAUDE, STATE_DIR, BACKLOG_DIR } from "./paths.mjs";
 import { listProjects, getProject } from "./projects.mjs";
+import { KINDS, entryDir } from "./entries.mjs";
 import { readState, writeState } from "./state.mjs";
 import { readBacklog, writeBacklog, emptyBacklog, runnableTasks } from "./backlog.mjs";
 import { listSessions, fileSession, sessionToTask, sessionToNewProject, moveTask } from "./sessions.mjs";
-import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForSecurityAudit, seedForDoctorFinding, launchClaude, launchRelay } from "./launch.mjs";
+import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForDoctorFinding, launchClaude, launchRelay } from "./launch.mjs";
 import { listRelayJobs, relayDir, dismissRelay } from "./relay.mjs";
 import { latestTodos, resolveCrossItems } from "./todos.mjs";
 import { taskTokens } from "./tokens.mjs";
+import { openFile } from "./open.mjs";
+import { harvest as runHarvest } from "./harvest.mjs";
+import { scanEnvs, updateEnv } from "./envs.mjs";
 import { readDoctor, scanAndCache, startDoctorTimer, withStatuses, setStatus, verifyFinding, FINDING_STATUSES, NOTE_MAX } from "./doctor.mjs";
 import {
   burnSnapshot,
@@ -45,11 +48,14 @@ app.use("/api", (req, res, next) => {
   next();
 });
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, root: PM_ROOT }));
+app.get("/api/health", (_req, res) => res.json({ ok: true, root: PM_ROOT, self: process.env.PM_SELF_SLUG || null }));
 
-app.get("/api/projects", async (_req, res, next) => {
+// ?kind=project (default) | benchmark | tool | all  (see server/entries.mjs)
+app.get("/api/projects", async (req, res, next) => {
   try {
-    res.json(await listProjects());
+    const kind = req.query.kind || "project";
+    if (kind !== "all" && !KINDS.includes(kind)) return res.status(400).json({ error: "bad kind" });
+    res.json(await listProjects(kind));
   } catch (e) {
     next(e);
   }
@@ -89,6 +95,7 @@ app.put("/api/projects/:slug/state", async (req, res, next) => {
       next: [],
       lastFailure: "none",
       blockers: "none",
+      resume: {},
     };
     const b = req.body || {};
     const merged = {
@@ -97,11 +104,12 @@ app.put("/api/projects/:slug/state", async (req, res, next) => {
       next: Array.isArray(b.next) ? b.next : cur.next,
       lastFailure: b.lastFailure ?? cur.lastFailure,
       blockers: b.blockers ?? cur.blockers,
+      resume: { ...cur.resume, ...(b.resume && typeof b.resume === "object" ? b.resume : {}) },
     };
     await writeState(slug, merged);
     res.json(await getProject(slug));
   } catch (e) {
-    if (/40-line cap/.test(e.message)) return res.status(422).json({ error: e.message });
+    if (/-(line|char) cap/.test(e.message)) return res.status(422).json({ error: e.message });
     next(e);
   }
 });
@@ -208,7 +216,7 @@ app.post("/api/sessions/:id/resume", async (req, res, next) => {
   try {
     if (!SESSION_ID_RE.test(req.params.id)) return res.status(400).json({ error: "bad id" });
     if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
-    res.json({ ok: true, ...(await launchClaude({ cwd: PM_ROOT, resumeId: req.params.id })) });
+    res.json({ ok: true, ...(await launchClaude({ cwd: PM_ROOT, resumeId: req.params.id, bg: req.body?.bg })) });
   } catch (e) {
     next(e);
   }
@@ -223,9 +231,24 @@ app.post("/api/projects/:slug/tasks/:id/launch", async (req, res, next) => {
     const bl = await readBacklog(slug);
     const t = bl && bl.tasks.find((x) => x.id === Number(id));
     if (!t) return res.status(404).json({ error: "no such task" });
-    const dir = join(PM_ROOT, slug);
+    const dir = entryDir(slug);
     const prompt = seedForTask({ slug, title: t.title, note: t.note, adhoc: !existsSync(dir) });
-    res.json({ ok: true, ...(await launchClaude({ cwd: dir, prompt, todos: [{ slug, title: t.title }] })) });
+    res.json({ ok: true, ...(await launchClaude({ cwd: dir, prompt, todos: [{ slug, title: t.title }], bg: req.body?.bg })) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Continue: interactive session that re-orients from the project's state + Resume block.
+app.post("/api/projects/:slug/continue", async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug)) return res.status(400).json({ error: "bad slug" });
+    if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
+    if (!(await readState(slug)) && !(await readBacklog(slug))) return res.status(404).json({ error: "no such project" });
+    const dir = entryDir(slug);
+    const prompt = seedForContinue({ slug, adhoc: !existsSync(dir) });
+    res.json({ ok: true, ...(await launchClaude({ cwd: dir, prompt, bg: req.body?.bg })) });
   } catch (e) {
     next(e);
   }
@@ -237,9 +260,9 @@ app.post("/api/projects/:slug/security-audit", async (req, res, next) => {
     const { slug } = req.params;
     if (!SLUG_RE.test(slug) || slug === "ideas") return res.status(400).json({ error: "bad slug" });
     if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
-    const dir = join(PM_ROOT, slug);
+    const dir = entryDir(slug);
     const prompt = seedForSecurityAudit({ slug, adhoc: !existsSync(dir) });
-    res.json({ ok: true, ...(await launchClaude({ cwd: dir, prompt })) });
+    res.json({ ok: true, ...(await launchClaude({ cwd: dir, prompt, bg: req.body?.bg })) });
   } catch (e) {
     next(e);
   }
@@ -257,12 +280,12 @@ app.post("/api/projects/:slug/tasks/run-seq", async (req, res, next) => {
     const bl = await readBacklog(slug);
     const { mode, tasks } = runnableTasks(bl ? bl.tasks : []);
     if (!tasks.length) return res.status(400).json({ error: "no runnable todos" });
-    const dir = join(PM_ROOT, slug);
+    const dir = entryDir(slug);
     const relay = unattended(req);
     const prompt = seedForSequentialRun({ slug, tasks, adhoc: !existsSync(dir), mode, relay });
     const launched = relay
       ? await launchRelay({ cwd: dir, prompt, label: `${slug} (${tasks.length})`, tasks: tasks.map((t) => ({ slug, title: t.title })) })
-      : await launchClaude({ cwd: dir, prompt, todos: tasks.map((t) => ({ slug, title: t.title })) });
+      : await launchClaude({ cwd: dir, prompt, todos: tasks.map((t) => ({ slug, title: t.title })), bg: req.body?.bg });
     res.json({ ok: true, mode, count: tasks.length, ...launched });
   } catch (e) {
     next(e);
@@ -433,6 +456,38 @@ app.post("/api/doctor/findings/:id/verify", async (req, res, next) => {
 });
 startDoctorTimer();
 
+// Open a workspace file (pdf/xlsx/ipynb/md/…) in its default app — see server/open.mjs.
+app.post("/api/open", async (req, res, next) => {
+  try {
+    if (!canLaunch(req)) return res.status(403).json({ error: "open needs loopback or PM_TOKEN" });
+    const { path, slug } = req.body || {};
+    res.json({ ok: true, ...(await openFile(path, slug)) });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  }
+});
+
+// --- env manager (masked values only; read and write need loopback/PM_TOKEN) ---
+app.get("/api/envs", async (req, res, next) => {
+  try {
+    if (!canLaunch(req)) return res.status(403).json({ error: "envs need loopback or PM_TOKEN" });
+    res.json({ vars: await scanEnvs() });
+  } catch (e) {
+    next(e);
+  }
+});
+app.post("/api/envs/update", async (req, res, next) => {
+  try {
+    if (!canLaunch(req)) return res.status(403).json({ error: "env update needs loopback or PM_TOKEN" });
+    const { name, value, files, dryRun } = req.body || {};
+    res.json(await updateEnv(name, value, { files, dryRun: !!dryRun }));
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  }
+});
+
 // --- live updates: fs.watch on the three dirs/files -> SSE ping -----------
 const clients = new Set();
 app.get("/api/stream", (req, res) => {
@@ -458,13 +513,8 @@ for (const p of [STATE_DIR, BACKLOG_DIR, join(CLAUDE, "pm"), relayDir(PM_ROOT)])
 }
 
 // --- activity harvester: run on boot + every 10 min ----------------------
-const HARVESTER = join(PM_ROOT, ".claude/scripts/pm-activity.mjs");
 function harvest() {
-  if (!existsSync(HARVESTER)) return;
-  execFile("node", [HARVESTER], { env: { ...process.env } }, (err) => {
-    if (err) console.error("[pm-activity]", err.message);
-    else ping();
-  });
+  runHarvest().then(ping, (err) => console.error("[harvest]", err.message));
 }
 harvest();
 setInterval(harvest, 10 * 60 * 1000).unref();

@@ -13,8 +13,14 @@ and let them run unattended.
 ## Features
 
 - **Project board** — one card per project with status, open-task count, last activity,
-  and a blocked marker. Hide projects with the Filter; light/dark theme.
-- **Status** — a short "Now / Next / Last failure / Blockers" note per project (max 40 lines).
+  and a blocked marker. Search, sort (blocked first / recent / stalest / A–Z) and Filter; a
+  "stale" badge after 7 idle days; a color per project (swatches on the project page, stored in
+  your browser); light/dark theme. Two tabs: **Projects** (benchmark/tool entries from
+  `entries.json` sit in a collapsed group) and **Tools** (Env Manager). Sessions, Doctor and
+  Usage are under **Help**.
+- **Side pane** — set `PM_SELF_SLUG=<project>` and a floating button opens that project
+  (e.g. the board's own todos) in a right-hand pane next to whatever you are doing.
+- **Status** — a short "Now / Next / Last failure / Blockers" note per project (max 50 lines), plus an optional **Resume** block (where to pick it back up).
 - **Backlog** — Doing / Todo / Blocked / Done, with priorities (`p1`–`p3`), notes, and
   moving tasks between projects.
 - **Build with Claude** — ▶ on a task opens a terminal running a seeded Claude Code session.
@@ -28,7 +34,27 @@ and let them run unattended.
 
 ## Quick start
 
-Requires **Node ≥ 20**.
+One command, no questions asked (macOS; re-runnable):
+
+```sh
+scripts/setup.sh
+```
+
+It checks Node ≥ 20 (installs it with Homebrew if missing), runs `npm ci`, builds the web app,
+creates `$PM_ROOT/.claude/{state,backlog,rules,handoffs,pm}`, installs [`claude-config/`](claude-config/README.md),
+then starts the board on <http://127.0.0.1:4500> and opens it. It never overwrites a file of yours; any
+settings file it changes is copied to `<file>.bak-<timestamp>` first. What it installs from `claude-config/`:
+
+| Where | What | Rule |
+|---|---|---|
+| `~/.claude/statusline/` | spend status line | `statusLine` in `~/.claude/settings.json` is added only if you have none |
+| `$PM_ROOT/.claude/hooks/`, `skills/` | ask-via-AskUserQuestion reminder, destructive-command guard, `handoff`, `retro` | copied only if missing |
+| `$PM_ROOT/.claude/settings.local.json` | the two hooks, with absolute paths | merged, no duplicates |
+
+Not installed because they contain placeholders to fill in: `claude-config/CLAUDE.md`, `rules/`, `memory/`.
+Options: `--no-claude-config` (skip the install), `--no-start` (set up only), `PM_ROOT=<dir>` (pick the workspace).
+
+Manual route:
 
 ```sh
 npm install
@@ -45,10 +71,11 @@ PM_ROOT=~/Projects npm run dev
 | Command | What it does |
 |---|---|
 | `npm run dev` | Server `:4500` + Vite `:4501` (proxies `/api`) |
-| `scripts/start.sh` | Same, but Ctrl+C reliably stops both |
+| `scripts/setup.sh` | Everything: deps, build, workspace folders, claude-config, start, open browser |
+| `scripts/start.sh` | Same as `npm run dev`, but checks the ports first and Ctrl+C reliably stops both |
 | `npm test` | Unit and integration tests |
 | `npm run build` | Build `web/dist` |
-| `npm run verify` | Boots against a throwaway workspace and smoke-tests it. Needs the author's outer workspace scripts, so it won't run in a bare clone |
+| `npm run verify` | Boots against a throwaway workspace and smoke-tests it. The browser step runs only when the author's outer workspace has `.claude/scripts/browser.mjs`; otherwise it is skipped |
 | `npm run app` | **macOS only** — build and run the Electron desktop shell |
 | `npm run app:dmg` | **macOS only** — package `release/PM-<ver>.dmg` |
 
@@ -61,15 +88,37 @@ PM_ROOT=~/Projects npm run dev
 | ▶ / Run @seq / reopen session | ✅ via `osascript` (iTerm or Terminal) | ❌ not implemented |
 | Unattended relay | ✅ (uses `caffeinate`) | ❌ not implemented |
 
+### Terminal colors
+
+Board launches (▶, Run @seq, Continue, Doctor fix) open a window with your terminal's **default
+profile** — iTerm2 if `/Applications/iTerm.app` exists, else Terminal.app — so colors come from that
+profile, not from the board.
+
+- **Truecolor**: iTerm2 and Terminal.app both render 24-bit color. Check with
+  `echo $COLORTERM` (expect `truecolor`); if empty, add `export COLORTERM=truecolor` to `~/.zshrc`.
+- **Theme**: pick light or dark inside Claude Code with `/theme`, and match the terminal profile
+  (iTerm2 → Settings → Profiles → Colors → Color Presets; Terminal.app → Settings → Profiles).
+- **Per-project tint**: the swatch you pick on a project page (or its automatic hue) tints the
+  background of terminal windows launched from that page (▶, Run @seq, Continue, Security audit,
+  reopen session) to a very dark shade of that color, so windows of different projects are easy to
+  tell apart. Pick "default" to keep the hue derived from the slug. The tint is set on the window
+  through AppleScript (`set background color`), so it overrides the profile's background for that
+  window only. The unattended relay runs headless and is not tinted. If your `~/.zshrc` wraps
+  `claude` and repaints the background, remove that wrapper's color line or it will win.
+- **Turning color off or forcing it**: `NO_COLOR=1` disables ANSI color in most CLIs; `FORCE_COLOR=1`
+  forces it when output is piped. The board never sets either.
+- **Status line**: `claude-config/statusline/` prints plain text (no escape codes), so it follows your theme.
+
 ## How it works
 
 Everything lives under `$PM_ROOT/.claude/`:
 
 | Path | Purpose |
 |---|---|
-| `state/<slug>.md` | One-glance status, ≤ 40 lines. The API rejects edits past the cap (HTTP 422) |
+| `state/<slug>.md` | One-glance status, ≤ 50 lines and 4000 chars. The API rejects edits past either cap (HTTP 422) |
 | `backlog/<slug>.md` | Task list. `## Doing/Todo/Blocked/Done` sections, one `- ` bullet per task |
-| `rules/<slug>.md` | Constraints a launched session reads first. Not rendered by the board |
+| `rules/<slug>.md` | Constraints a launched session reads first. Not rendered by the board. A rules file alone does not make a project (it needs a state or backlog file) |
+| `entries.json` | Optional. Tracks benchmarks/tools that live outside `PM_ROOT/<slug>`: `{"<slug>": {"kind": "benchmark"\|"tool", "path": "<relative to PM_ROOT>"}}`. Launches and `open` use that folder (a file path means its parent folder); `GET /api/projects?kind=benchmark\|tool\|all` lists them, the default list shows projects only |
 | `handoffs/*.md` | Session handoff notes, shown in the activity timeline |
 | `pm/activity.json`, `pm/sessions.json`, `pm/doctor.json` | Generated — never hand-edit |
 | `pm/session-index.json` | Your map of session id → project |
@@ -96,11 +145,51 @@ back to state and backlog when done. That is what keeps the board live rather th
 Trailing order is `<title>  @seq  p<n>  (date)`. An indented line is the task's note.
 Task ids are positional and shift after any write.
 
+### Resume block
+
+Optional last section of `.claude/state/<slug>.md`: where to pick the project back up. Written
+only when a field is set, so state files without it are unchanged.
+
+```md
+## Resume
+Last result: 42/50 pass, $1.84 total (baseline $2.31)
+Re-run: python -m evals.run --variant b --n 50
+Branch/variant: f-skill-cost / opus5
+Artifacts: reports/R03.md, nb/ab.ipynb
+```
+
+- Shown on the project page under "Where you left off" (with a copy button on Re-run); project
+  cards show the last result and the first Next item.
+- Launched sessions are told to read it first and to update it when they finish. Unattended runs
+  can't edit `.claude/`, so they use
+  `node server/backlog-cli.mjs state <slug> resume <last-result|re-run|branch|artifacts> "<value>"`.
+- The same CLI's `add <slug> "<title>" ["note"]` takes an optional indented note.
+- State files are snapshots, not logs: `serializeState` caps them at 50 lines and 4000 chars.
+
+### Open buttons
+
+`POST /api/open {path, slug?}` opens a file in its default Mac app (`open`). The path (absolute, or
+relative to `PM_ROOT` / the slug's folder) must resolve — symlinks followed — inside `PM_ROOT` and be a
+pdf/xlsx/xls/csv/ipynb/html/md/txt/json/docx/pptx/image; anything else is 4xx (400 type, 403 outside,
+404 missing). Loopback or `PM_TOKEN` only; `PM_LAUNCH_DRYRUN=1` answers without opening. In the UI every
+such path in a todo note, the Resume block (last result, artifacts), the newest-handoff line and the
+handoff rows of the timeline gets an `open` button (`web/src/PathText.jsx`).
+
 ## Running Claude Code from the board
 
 Launch buttons work only from the same machine, or with a valid `PM_TOKEN` (see
 [Configuration](#configuration)). pm never calls an LLM itself — it only seeds terminal
 sessions.
+
+Launched sessions (terminal and relay) get `--settings <PM_ROOT>/.claude/settings.json` (else
+`settings.local.json`) so workspace hooks and env load even when the session's cwd is a project
+subfolder. Hook commands in that file must use absolute paths (`$CLAUDE_PROJECT_DIR` didn't resolve
+from a subfolder when this was added).
+
+### Continue (▶ on "Where you left off")
+
+Opens an interactive session that reads rules + state + Resume, summarises in a few lines, and
+waits for your go. It never runs the Re-run command on its own (evals can hit paid APIs).
 
 ### Single task (▶)
 
@@ -212,6 +301,18 @@ In-progress and done findings show a **Fix** note field (what you changed) and a
 Runs every `PM_DOCTOR_INTERVAL_MIN` minutes (default 360, `0` = off) and on **Scan now**;
 result cached in `.claude/pm/doctor.json`. `PM_DOCTOR_DAYS` (default 14) sets the window.
 
+### Env Manager
+
+Home → **Envs**. `server/envs.mjs` scans `PM_ROOT` for live `.env`, `.env.local|test|development|production|staging`
+files (depth ≤ 5; skips `archive/`, `node_modules`, venvs, `.bak`/`.cpgz` and `*.example`) and groups
+variables by name with masked values (last 4 characters). Each variable is a collapsed row with a
+checkbox per file (default all). Paste a new value and **Update N files**: a dry-run list, a confirm,
+then that variable is rewritten in the checked files (quotes, `export` and trailing comments kept)
+after each changed file is copied to `<file>.bak-<ts>`.
+
+API: `GET /api/envs`, `POST /api/envs/update {name, value, files?, dryRun?}`. Both are loopback or
+`PM_TOKEN` only; values are never returned unmasked or logged. Tests: `server/envs.test.mjs`.
+
 ### Continuous (optional)
 
 If a `continuous/` project sits next to `pm/`, a **Continuous** tab shows and controls its
@@ -230,6 +331,7 @@ All optional, via environment variables:
 | `PM_DOCTOR_INTERVAL_MIN` / `PM_DOCTOR_DAYS` | `360` / `14` | Doctor scan period (0 = off) and look-back window |
 | `PM_RELAY_*` | see above | Unattended relay tunables (macOS only) |
 | `CONTINUOUS_ROOT` | `$PM_ROOT/continuous` | Location of the optional runner |
+| `PM_SELF_SLUG` | unset | Project shown in the right-hand side pane (and left out of the card list) |
 
 ## Security
 

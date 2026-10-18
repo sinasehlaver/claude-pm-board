@@ -18,9 +18,9 @@ writeFileSync(join(c, "pm", "activity.json"), JSON.stringify([{ project: "hub", 
 process.env.PM_ROOT = root;
 const { discoverSlugs, listProjects, getProject } = await import("./projects.mjs");
 
-test("discovery is the union of rules / state / backlog, minus _TEMPLATE", async () => {
+test("discovery is the union of state / backlog minus _TEMPLATE; a rules file alone is not a project", async () => {
   const { all } = await discoverSlugs();
-  assert.deepEqual(all, ["agent", "hub", "randomidea"]);
+  assert.deepEqual(all, ["hub", "randomidea"]); // rules/agent.md alone does not count
 });
 
 test("list carries status, open count, last activity, adhoc flag", async () => {
@@ -31,7 +31,6 @@ test("list carries status, open count, last activity, adhoc flag", async () => {
   assert.equal(hub.lastActivity, "2026-09-07");
   assert.equal(hub.adhoc, false);
   assert.equal(list.find((p) => p.slug === "randomidea").adhoc, true);
-  assert.equal(list.find((p) => p.slug === "agent").adhoc, false); // has rules file
 });
 
 test("detail bundles state + backlog + filtered activity", async () => {
