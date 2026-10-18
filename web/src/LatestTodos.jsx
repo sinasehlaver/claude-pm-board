@@ -3,6 +3,7 @@ import { get, onStream, send } from "./api";
 import Help from "./Help.jsx";
 import TokBadge, { useTaskTokens } from "./TokBadge.jsx";
 import { UnattendedToggle, launchNotice, loadUnattended } from "./relay.jsx";
+import { alertDialog } from "./dialog.jsx";
 
 const PROJECT_KEY = "pm.addTodoProject";
 const LATEST_OPEN_KEY = "pm.latestTodosOpen";
@@ -88,7 +89,7 @@ export default function LatestTodos({ projects, reload, hidden = [] }) {
       await load();
       reload();
     } catch (err) {
-      alert(err.message);
+      alertDialog(err.message);
     } finally {
       setBusy(false);
     }
@@ -110,7 +111,7 @@ export default function LatestTodos({ projects, reload, hidden = [] }) {
       setNotice(launchNotice(r, `${r.count} todo(s) across ${r.projects} project(s)`));
       setPicked(new Set());
     } catch (err) {
-      alert(err.message);
+      alertDialog(err.message);
       load(); // a 409 means ids shifted — pull the fresh list
     } finally {
       setBusy(false);

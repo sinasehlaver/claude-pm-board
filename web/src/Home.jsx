@@ -1,23 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ago, get, send } from "./api";
 import Help from "./Help.jsx";
 import LatestTodos from "./LatestTodos.jsx";
 import { RelayStrip } from "./relay.jsx";
-import { costFor, tokensFor } from "./pricing.js";
-import { loadUnit, REFRESH_KEY, loadRefreshSec, RefreshSelect } from "./usageSettings.jsx";
 import { loadColor, slugStyle } from "./projectColor.jsx";
+import { alertDialog, promptDialog } from "./dialog.jsx";
 
-const k = (n) => (n == null ? "—" : n >= 1000 ? Math.round(n / 1000).toLocaleString() + "k" : String(Math.round(n)));
-const usd = (n) => (n == null ? "—" : "$" + n.toFixed(n < 1 ? 3 : 2));
+const usd = (n) => (n == null ? "—" : "$" + n.toFixed(2));
 
-// sum a set of per-model token rows into a single $ or token figure, matching
-// the unit set on the Usage page (see usageSettings.jsx).
-function burnFigure(rows, unit) {
-  const sum = (rows || []).reduce((s, r) => s + (unit === "cost" ? costFor(r) : tokensFor(r)), 0);
-  return unit === "cost" ? usd(sum) : k(sum);
-}
-
-const HIDDEN_KEY = "pm.hiddenSlugs";
+export const HIDDEN_KEY = "pm.hiddenSlugs";
 const SORT_KEY = "pm.sort";
 const TAB_KEY = "pm.tab";
 const TOOLS_OPEN_KEY = "pm.toolsGroupOpen";
@@ -50,7 +41,7 @@ const SORTS = {
   name: ["A–Z", (a, b) => a.title.localeCompare(b.title)],
 };
 
-function loadHidden() {
+export function loadHidden() {
   try {
     const raw = localStorage.getItem(HIDDEN_KEY);
     const arr = raw ? JSON.parse(raw) : [];
@@ -60,8 +51,10 @@ function loadHidden() {
   }
 }
 
-export default function Home({ projects, inboxCount, selfSlug, onOpen, onSessions, onUsage, onDoctor, onEnvs, reload }) {
+export default function Home({ projects, inboxCount, selfSlug, onOpen, onSessions, onDoctor, onEnvs, onPorts, onChanges, reload }) {
   const [idea, setIdea] = useState("");
+  const [ideaMsg, setIdeaMsg] = useState({});
+  const ideaTimer = useRef(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState(() => loadPref(SORT_KEY, (v) => v in SORTS, "focus"));
   const [tab, setTab] = useState(() => loadPref(TAB_KEY, (v) => TABS.some(([k]) => k === v), "project"));
@@ -69,23 +62,13 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   const [hidden, setHidden] = useState(loadHidden);
   const [showFilter, setShowFilter] = useState(false);
   const [burn, setBurn] = useState(null);
-  const [unit] = useState(loadUnit);
-  const [refreshSec, setRefreshSec] = useState(loadRefreshSec);
 
   useEffect(() => {
-    function load() {
-      get("/usage/burn").then(setBurn).catch(() => {});
-    }
+    const load = () => get("/usage").then(setBurn).catch(() => {});
     load();
-    if (!refreshSec) return;
-    const id = setInterval(load, refreshSec * 1000);
+    const id = setInterval(load, 60_000);
     return () => clearInterval(id);
-  }, [refreshSec]);
-
-  function changeRefresh(sec) {
-    localStorage.setItem(REFRESH_KEY, String(sec));
-    setRefreshSec(sec);
-  }
+  }, []);
 
   function toggleHidden(slug) {
     setHidden((prev) => {
@@ -96,7 +79,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   }
 
   async function addAdhoc() {
-    const raw = prompt("New ad-hoc item — short slug (a-z, 0-9, -):");
+    const raw = await promptDialog({ title: "New ad-hoc item", label: "Short slug (a-z, 0-9, -)", confirmLabel: "Create" });
     if (!raw) return;
     const slug = raw.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-");
     try {
@@ -104,19 +87,24 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
       reload();
       onOpen(slug);
     } catch (e) {
-      alert(e.message);
+      alertDialog(e.message);
     }
   }
 
   async function captureIdea(e) {
     e.preventDefault();
-    if (!idea.trim()) return;
+    const title = idea.trim();
+    if (!title || ideaMsg.busy) return;
+    setIdeaMsg({ busy: true });
     try {
-      await send("POST", "/projects/ideas/tasks", { title: idea.trim() });
+      await send("POST", "/projects/ideas/tasks", { title });
       setIdea("");
       reload();
-    } catch (e) {
-      alert(e.message);
+      setIdeaMsg({ ok: `Saved to Ideas: “${title.length > 60 ? title.slice(0, 57) + "…" : title}”` });
+      clearTimeout(ideaTimer.current);
+      ideaTimer.current = setTimeout(() => setIdeaMsg({}), 3500);
+    } catch (err) {
+      setIdeaMsg({ err: err.message });
     }
   }
 
@@ -132,7 +120,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   const changeSort = (v) => (setSort(v), savePref(SORT_KEY, v));
   const toggleTools = () => (setToolsOpen(!toolsOpen), savePref(TOOLS_OPEN_KEY, toolsOpen ? "0" : "1"));
 
-  // Projects tab = projects, plus a collapsible group for benchmark/tool entries (entries.json).
+  // Projects tab = projects, plus a collapsible group for tool entries (entries.json).
   // Tools tab = in-app tools (Env Manager). The self project (PM_SELF_SLUG) lives in the side pane.
   const sorted = (projects || [])
     .filter((p) => p.slug !== selfSlug)
@@ -192,7 +180,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   };
 
   return (
-    <div className="screen">
+    <div className="screen home-screen">
       <header className="bar">
         <nav className="tabs">
           {TABS.map(([k, label]) => (
@@ -210,9 +198,6 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
               </button>
               <button className="link" onClick={onDoctor} title="LLM-free scan of transcripts: where errors and token spend concentrate">
                 Doctor
-              </button>
-              <button className="link" onClick={onUsage} title="Token/cost burn rate across all sessions, and rate-limit ceiling">
-                Usage
               </button>
             </div>
           </details>
@@ -238,11 +223,16 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
             placeholder="💡 capture an idea…"
             value={idea}
             onChange={(e) => setIdea(e.target.value)}
+            readOnly={ideaMsg.busy}
+            aria-label="Capture an idea"
           />
           <Help
             text="Quick-drop a thought here without picking a project. It lands in the pinned Ideas list below, for sorting later."
             side="left"
           />
+        </div>
+        <div className={"capture-msg" + (ideaMsg.err ? " err" : ideaMsg.ok ? " ok" : "")} role="status" aria-live="polite">
+          {ideaMsg.busy ? "Saving…" : ideaMsg.err ? `Couldn't save: ${ideaMsg.err}` : ideaMsg.ok || ""}
         </div>
       </form>
 
@@ -270,18 +260,11 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
 
       {burn && (
         <div className="burn-strip-row">
-          <button className="burn-strip" onClick={onUsage} title="open Usage">
-            <span>🔥 {burnFigure(burn.breakdown?.win1h, unit)}{unit === "cost" ? "" : " tok"}/1h</span>
-            <span>{burnFigure(burn.breakdown?.win5h, unit)} / 5h</span>
-            <span>{burnFigure(burn.breakdown?.win7d, unit)} / 7d</span>
-            {burn.limits?.windows?.["5h"]?.limitStatus && burn.limits.windows["5h"].limitStatus !== "allowed" && (
-              <span className="pill bad">{burn.limits.windows["5h"].limitStatus}</span>
-            )}
-          </button>
-          <span className="bar-item">
-            <RefreshSelect value={refreshSec} onChange={changeRefresh} />
-            <Help text="How often the burn-rate strip above refreshes itself. Shared with the same setting on the Usage page." />
-          </span>
+          <div className="burn-strip" title="Estimated Claude Code spend, same math as the statusline: current 5h block, today (UTC), last 7 days">
+            <span>🔥 {usd(burn.block)} / 5h</span>
+            <span>{usd(burn.today)} today</span>
+            <span>{usd(burn.week)} / 7d</span>
+          </div>
         </div>
       )}
 
@@ -299,6 +282,22 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
               <div className="status clamp">Every live .env var in the workspace with masked values; update one (e.g. a new API key) across all files at once, with a backup of each file.</div>
             </li>
           )}
+          {tab === "tool" && (
+            <li className="card pc has-pc" style={slugStyle("ports")} onClick={onPorts}>
+              <div className="card-top">
+                <span className="title">Ports</span>
+              </div>
+              <div className="status clamp">Every TCP port something on this Mac is listening on, with the owning process; stop one after a confirmation.</div>
+            </li>
+          )}
+          {tab === "tool" && (
+            <li className="card pc has-pc" style={slugStyle("changes")} onClick={onChanges}>
+              <div className="card-top">
+                <span className="title">Changes</span>
+              </div>
+              <div className="status clamp">Uncommitted edits in every git repo: side-by-side diffs, keep or discard per hunk, then commit and push. Plain git, no Claude.</div>
+            </li>
+          )}
           {visible.map(renderCard)}
           {entries.length > 0 && (
             <li
@@ -309,7 +308,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
               aria-expanded={toolsOpen}
               onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && toggleTools()}
             >
-              <span className={`chevron${toolsOpen ? " open" : ""}`}>▸</span> benchmarks &amp; tools <span className="muted">({entries.length})</span>
+              <span className={`chevron${toolsOpen ? " open" : ""}`}>▸</span> tools <span className="muted">({entries.length})</span>
             </li>
           )}
           {toolsOpen && entries.map(renderCard)}
@@ -324,7 +323,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   );
 }
 
-function FilterSheet({ projects, hidden, onToggle, onAll, onClose }) {
+export function FilterSheet({ projects, hidden, onToggle, onAll, onClose }) {
   const pickable = projects.filter((p) => !p.pinned);
   return (
     <div className="sheet-backdrop" onClick={onClose}>

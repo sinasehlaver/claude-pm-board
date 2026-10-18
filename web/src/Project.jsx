@@ -1,10 +1,11 @@
-import { useState } from "react";
-import { ago, send } from "./api";
+import { useEffect, useState } from "react";
+import { ago, get, send } from "./api";
 import Help from "./Help.jsx";
 import PathText, { OpenBtn } from "./PathText.jsx";
 import TokBadge, { useTaskTokens } from "./TokBadge.jsx";
 import { UnattendedToggle, loadUnattended } from "./relay.jsx";
 import { ColorPane, slugStyle, loadColor, saveColor, termBg } from "./projectColor.jsx";
+import { alertDialog, promptDialog } from "./dialog.jsx";
 
 const STATES = ["Doing", "Todo", "Blocked", "Done"];
 const KIND = { commit: "●", handoff: "⇄", plan: "▤" };
@@ -13,6 +14,7 @@ const EMPTY_RESUME = { lastResult: "", rerun: "", branch: "", artifacts: "" };
 export default function Project({ slug, data, projects, onBack, reload }) {
   const [editing, setEditing] = useState(false);
   const [showStatus, setShowStatus] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const [sectionOpen, setSectionOpen] = useState({ Blocked: false, Done: false });
   const [unattended, setUnattended] = useState(loadUnattended);
   const [color, setColor] = useState(() => loadColor(slug));
@@ -36,7 +38,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
       await fn();
       reload();
     } catch (e) {
-      alert(e.message);
+      alertDialog(e.message);
     }
   };
   const patchState = (patch) =>
@@ -59,8 +61,8 @@ export default function Project({ slug, data, projects, onBack, reload }) {
       await send("POST", `/projects/${slug}/tasks/run-seq`, { unattended, bg: termBg(slug, color) });
     });
   const securityAudit = () => act(() => send("POST", `/projects/${slug}/security-audit`, { bg: termBg(slug, color) }));
-  const moveTask = (id) => {
-    const to = prompt(`Move to which project?\n${moveTargets.join(", ")}`);
+  const moveTask = async (id) => {
+    const to = await promptDialog({ title: "Move task", label: "Move to which project?", options: moveTargets, confirmLabel: "Move" });
     if (to && moveTargets.includes(to))
       act(() => send("POST", `/tasks/move`, { fromSlug: slug, id, toSlug: to }));
   };
@@ -211,6 +213,8 @@ export default function Project({ slug, data, projects, onBack, reload }) {
         {!tasks.length && <p className="muted">No tasks yet.</p>}
       </section>
 
+      <Archived slug={slug} rev={tasks.length} reload={reload} />
+
       {sessions && sessions.length > 0 && (
         <section className="block">
           <div className="block-head">
@@ -242,13 +246,16 @@ export default function Project({ slug, data, projects, onBack, reload }) {
       <section className="block">
         <div className="block-head">
           <h2>Timeline</h2>
+          <button className="x" aria-expanded={timelineOpen} onClick={() => setTimelineOpen(!timelineOpen)}>
+            {timelineOpen ? "hide" : `show${activity?.length ? ` (${activity.length})` : ""}`}
+          </button>
         </div>
-        {handoff && (
+        {timelineOpen && handoff && (
           <p className="muted small">
             newest handoff: {handoff} <OpenBtn path={handoff} />
           </p>
         )}
-        <ul className="timeline">
+        {timelineOpen && <ul className="timeline">
           {(activity || []).map((a, i) => (
             <li key={i}>
               <span className="k">{KIND[a.kind] || "•"}</span>
@@ -258,9 +265,52 @@ export default function Project({ slug, data, projects, onBack, reload }) {
             </li>
           ))}
           {!activity?.length && <li className="muted">no activity harvested yet</li>}
-        </ul>
+        </ul>}
       </section>
     </div>
+  );
+}
+
+// Removed todos are archived server-side, never deleted; Restore puts one back in Todo.
+function Archived({ slug, rev, reload }) {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    let live = true;
+    get(`/projects/${slug}/archive`).then((j) => live && setItems(j.items || []), () => {});
+    return () => {
+      live = false;
+    };
+  }, [slug, rev]);
+  if (!items.length) return null;
+  const restore = async (title) => {
+    try {
+      await send("POST", `/projects/${slug}/archive/restore`, { title });
+      reload();
+    } catch (e) {
+      alertDialog(e.message);
+    }
+  };
+  return (
+    <details className="block archived">
+      <summary>Archived ({items.length})</summary>
+      {items.map((t) => (
+        <div key={t.id} className="task">
+          <div className="task-main">
+            <span className="ttitle" style={{ cursor: "default" }}>
+              {t.title}
+            </span>
+            <button className="x" onClick={() => restore(t.title)}>
+              restore
+            </button>
+          </div>
+          <div className="chips">
+            <span className="muted small">
+              removed {t.removed || "?"} · was {t.from || "?"}
+            </span>
+          </div>
+        </div>
+      ))}
+    </details>
   );
 }
 
@@ -356,7 +406,7 @@ function ResumePanel({ slug, state, onContinue, onEdit }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      alert("Copy failed — select the command and copy it by hand.");
+      alertDialog("Copy failed — select the command and copy it by hand.");
     }
   };
   return (
@@ -511,8 +561,8 @@ function Task({ t, slug, rec, onEdit, onDel, onBuild, onMove }) {
       <div className="task-main">
         <button
           className="ttitle"
-          onClick={() => {
-            const nv = prompt("Task", t.title);
+          onClick={async () => {
+            const nv = await promptDialog({ title: "Edit task", label: "Task", value: t.title });
             if (nv && nv !== t.title) onEdit(t.id, { title: nv });
           }}
         >

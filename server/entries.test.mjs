@@ -14,7 +14,8 @@ writeFileSync(join(root, "scripts_x/tool.py"), "");
 for (const s of ["hub", "bench1", "tool"]) writeFileSync(join(c, "backlog", `${s}.md`), `# ${s} — backlog\nUpdated: 2026-09-08\n\n## Todo\n- a\n`);
 writeFileSync(join(c, "rules/notebooks.md"), "# notebooks\n"); // rules only: not a project
 writeFileSync(join(c, "entries.json"), JSON.stringify({
-  bench1: { kind: "benchmark", path: "runs/bench1" },
+  bench1: { kind: "tool", path: "runs/bench1" },
+  old: { kind: "benchmark", path: "runs/old" }, // benchmark kind was dropped: ignored
   tool: { kind: "tool", path: "scripts_x/tool.py" },
   bad: { kind: "weird", path: "x" }, // ignored
 }));
@@ -26,8 +27,7 @@ const { guessProject } = await import("./harvest.mjs");
 
 test("entries stay out of the project list and are listed by kind; rules-only files are not projects", async () => {
   assert.deepEqual((await listProjects()).map((p) => p.slug), ["hub"]);
-  assert.deepEqual((await listProjects("benchmark")).map((p) => p.slug), ["bench1"]);
-  assert.deepEqual((await listProjects("tool")).map((p) => p.slug), ["tool"]);
+  assert.deepEqual((await listProjects("tool")).map((p) => p.slug).sort(), ["bench1", "tool"]);
   assert.equal((await listProjects("all")).length, 3);
   assert.equal(kindOf("bad"), "project");
 });
@@ -40,7 +40,7 @@ test("cwd: entry path (a file entry -> its folder), else PM_ROOT/slug", () => {
 
 test("detail carries kind + path; a session whose cwd is inside an entry path lands on it", async () => {
   const p = await getProject("bench1");
-  assert.equal(p.kind, "benchmark");
+  assert.equal(p.kind, "tool");
   assert.equal(p.path, "runs/bench1");
   const slugs = new Set(["hub", "bench1", "tool"]);
   const entries = entryPaths();

@@ -61,17 +61,11 @@ export function groupTasks(tasks, showDone) {
   return STATES.filter((s) => showDone || s !== "Done").flatMap((s) => tasks.filter((t) => t.state === s));
 }
 
-// One-line Claude usage (the 5h/7d numbers the statusline shows); null when no cache.
-export function usageLine(u, now = Date.now()) {
-  if (!u || (u.utilization5h == null && u.utilization7d == null)) return null;
-  const pct = (v) => (v == null ? "–" : `${Math.round(v)}%`);
-  const reset = (iso) => {
-    const ms = iso ? Date.parse(iso) - now : NaN;
-    return Number.isFinite(ms) && ms > 0 ? ` ↺${fmtAge(ms)}` : "";
-  };
-  const col = (v) => (v >= 90 ? 31 : v >= 70 ? 33 : 32);
-  const part = (label, v, iso) => `${label} ${paint(col(v ?? 0), pct(v))}${dim(reset(iso))}`;
-  return `claude ${part("5h", u.utilization5h, u.reset5hAt)} · ${part("7d", u.utilization7d, u.reset7dAt)}${u.stale ? dim(" (stale)") : ""}`;
+// One-line Claude spend (the 5h/today/7d USD numbers the statusline shows); null when none.
+export function usageLine(u) {
+  if (!u || u.block == null) return null;
+  const usd = (v) => `$${(v ?? 0).toFixed(2)}`;
+  return `claude 5h ${paint(32, usd(u.block))} · today ${usd(u.today)} · 7d ${usd(u.week)}`;
 }
 
 export function createApp(deps) {

@@ -15,9 +15,9 @@ and let them run unattended.
 - **Project board** — one card per project with a one-line description (the first paragraph of the project's `README.md`),
   status, open-task count, last activity, and a blocked marker. Search, sort (blocked first / recent / stalest / A–Z) and Filter; a
   "stale" badge after 7 idle days; a color per project (swatches on the project page, stored in
-  your browser); light/dark theme. Two tabs: **Projects** (benchmark/tool entries from
-  `entries.json` sit in a collapsed group) and **Tools** (Env Manager). Sessions, Doctor and
-  Usage are under **Help**.
+  your browser); light/dark theme. Two tabs: **Projects** (tool entries from
+  `entries.json` sit in a collapsed "tools" group) and **Tools** (Env Manager, Ports, Changes). Sessions and Doctor
+  are under **Help**.
 - **Side pane** — set `PM_SELF_SLUG=<project>` and a floating button opens that project
   (e.g. the board's own todos) in a right-hand pane next to whatever you are doing.
 - **Status** — a short "Now / Next / Last failure / Blockers" note per project (max 50 lines), plus an optional **Resume** block (where to pick it back up).
@@ -30,7 +30,7 @@ and let them run unattended.
 - **Ideas inbox** — capture a one-liner; ▶ researches it and can promote it to a project.
 - **Sessions inbox** — Claude Code conversations harvested from disk; file them to a
   project, turn one into a task, or reopen it.
-- **Usage** — token burn rate, rate-limit ceiling, and estimated cost by day and model.
+- **Usage strip** — Home shows estimated Claude Code spend (5h block / today / 7d, USD), the same numbers the statusline shows; `npm run tui` shows it in its footer.
 
 ## Quick start
 
@@ -76,8 +76,10 @@ PM_ROOT=~/Projects npm run dev
 | `npm test` | Unit and integration tests |
 | `npm run build` | Build `web/dist` |
 | `npm run verify` | Boots against a throwaway workspace and smoke-tests it. The browser step runs only when the author's outer workspace has `.claude/scripts/browser.mjs`; otherwise it is skipped |
-| `npm run app` | **macOS only** — build and run the Electron desktop shell |
+| `npm run app` | **macOS only** — build and run the Electron desktop shell. **⧉ button by the theme toggle** or View → Hover mode (`⌘⇧H`) makes it a compact always-on-top board that follows you across spaces; `⌘⌥P` shows/hides it from anywhere |
 | `npm run app:dmg` | **macOS only** — package `release/PM-<ver>.dmg` |
+
+**Hover in the browser:** the ⧉ button next to the theme toggle opens pm's own project page (see `PM_SELF_SLUG`) in a floating always-on-top window (Chrome/Edge Picture-in-Picture; other browsers get a plain small popup). The desktop shell's ⧉ pins the app window itself.
 
 ### Platform support
 
@@ -118,7 +120,7 @@ Everything lives under `$PM_ROOT/.claude/`:
 | `state/<slug>.md` | One-glance status, ≤ 50 lines and 4000 chars. The API rejects edits past either cap (HTTP 422) |
 | `backlog/<slug>.md` | Task list. `## Doing/Todo/Blocked/Done` sections, one `- ` bullet per task |
 | `rules/<slug>.md` | Constraints a launched session reads first. Not rendered by the board. A rules file alone does not make a project (it needs a state or backlog file) |
-| `entries.json` | Optional. Tracks benchmarks/tools that live outside `PM_ROOT/<slug>`: `{"<slug>": {"kind": "benchmark"\|"tool", "path": "<relative to PM_ROOT>"}}`. Launches and `open` use that folder (a file path means its parent folder); `GET /api/projects?kind=benchmark\|tool\|all` lists them, the default list shows projects only |
+| `entries.json` | Optional. Tracks tools that live outside `PM_ROOT/<slug>`: `{"<slug>": {"kind": "tool", "path": "<relative to PM_ROOT>"}}`. Launches and `open` use that folder (a file path means its parent folder); `GET /api/projects?kind=tool\|all` lists them, the default list shows projects only |
 | `handoffs/*.md` | Session handoff notes, shown in the activity timeline |
 | `pm/activity.json`, `pm/sessions.json`, `pm/doctor.json` | Generated — never hand-edit |
 | `pm/session-index.json` | Your map of session id → project |
@@ -126,6 +128,15 @@ Everything lives under `$PM_ROOT/.claude/`:
 
 `ideas.md` in `backlog/` is the pinned Ideas inbox. Session transcripts are read from
 `~/.claude/projects/<escaped-PM_ROOT>/*.jsonl`.
+
+**Nothing is hard-deleted.** Removing a todo (or any write that drops one, e.g. a full
+overwrite) appends it to `backlog-archive/<slug>.md` (same bullet format plus a
+`<!-- removed: date from: State -->` line); each project page has an "Archived" list with
+Restore (back to Todo). Every backlog write also keeps a snapshot of the previous file in
+`backlog-archive/.snapshots/<slug>.<timestamp>.md` (last 20 per project).
+`GET /api/projects/:slug/archive`, `POST /api/projects/:slug/archive/restore {title}`.
+`backlog-cli.mjs` is add/move/list only: `list <slug> [state]` is read-only, `add` refuses a
+duplicate exact title, `move` matches the exact title and never renames.
 
 The board edits state and backlog; launched sessions read all three files and write
 back to state and backlog when done. That is what keeps the board live rather than a copy.
@@ -205,6 +216,9 @@ the project's own suite, a report in `knowledge/security/<slug>.md`, and one bac
 per confirmed finding. No live probing. Build prompts also carry a one-line
 secure-by-default reminder and a port note: pick dev-server ports from a local port
 registry (`.claude/ports.md`, if your workspace has one) so projects don't collide.
+They also point new web UIs at a workspace `_webapp-defaults.md` rule and `_starter/` kit
+(theme, collapsible lists/panels, undo/redo, save/open file, …); both are optional files in
+your workspace, and the note does nothing without them.
 
 ### Batches (▶▶ Run @seq)
 
@@ -252,12 +266,17 @@ Tunables (env): `PM_RELAY_STOP_5H` (0.95), `PM_RELAY_STOP_7D` (0.97),
 ### Ideas inbox
 
 The 💡 box on Home drops a one-liner into `backlog/ideas.md`. On the Ideas project,
-▶ and ▶▶ behave differently: they triage the idea — business concept → `venturemind`;
+▶ and ▶▶ first check whether the idea asks for research or brainstorming ("find me ideas for…", "how do X do Y")
+rather than naming something to build. If so they write a findings doc to `knowledge/research/<slug>.md`,
+note it on the idea, and stop — nothing is promoted or built. Otherwise they triage the idea — business concept → `venturemind`;
 otherwise `prospector` checks whether to adopt an existing tool or build.
 
 - **Adopt** — stops; verdict and report path are noted on the idea.
-- **Build / Adopt + extend** — continues into `atelier`. ▶ researches and promotes the idea
-  to a project (state + backlog, no code). ▶▶ also scaffolds `PM_ROOT/<slug>/` and builds.
+- **Build / Adopt + extend** — continues into `atelier`. Prospector states a provisional *form*
+  and atelier confirms it: a **project**, a **tool** (single-purpose, about one session; still a
+  full project, plus an `entries.json` row so it sits in the Projects tab's "tools" group), or a
+  **pm feature** (a part of pm itself — no project, one todo in pm's backlog). ▶ researches and
+  promotes the idea (state + backlog, no code). ▶▶ also scaffolds `PM_ROOT/<slug>/` and builds.
 
 Todos written by Claude read like todos you'd write: one per checkpoint ("Build block A, tell
 me how to test it, and wait for me to test it"), not one per internal phase. The phase list lives
@@ -274,10 +293,11 @@ its own filed sessions.
 
 ### Usage
 
-Parses `~/.claude/projects/**/*.jsonl` directly, so it needs nothing else running:
-rolling 1h / 5h / 7d token totals, rate-limit ceiling from
-`~/.claude/vscode-claude-status-cache.json` (flagged stale after ~15 min), a 14-day
-chart, and per-model totals. Cost is an estimate from `web/src/pricing.js`, not a bill.
+The Home strip and TUI footer show estimated spend computed like the Claude Code statusline's
+`usage.py`: the current 5h block, today and the last 7 days (local time, like ccusage), from
+`~/.claude/projects/**/*.jsonl` incl. subagents (deduped by message id). Cost is an estimate from the `PRICING`
+table in `server/statusline-usage.mjs` (USD per million tokens) — edit it when rates change,
+and it's not a bill. There is no rate-limit-percentage view; `GET /api/usage` returns the figures.
 
 ### Tokens per todo
 
@@ -329,6 +349,27 @@ after each changed file is copied to `<file>.bak-<ts>`.
 API: `GET /api/envs`, `POST /api/envs/update {name, value, files?, dryRun?}`. Both are loopback or
 `PM_TOKEN` only; values are never returned unmasked or logged. Tests: `server/envs.test.mjs`.
 
+### Ports
+
+Home → Tools → **Ports**. Lists every TCP port something on this Mac is listening on (port, process, the project
+it runs from, PID, bound address) via `lsof`; filter box and Refresh. **Stop** asks for a confirmation, then sends `SIGTERM`.
+Only your own processes can be stopped, never the board itself, and the server re-checks that the PID still
+listens on that port before signalling. macOS/Linux with `lsof`; no Windows support.
+
+API: `GET /api/ports`, `POST /api/ports/kill {pid, port}`, both loopback or `PM_TOKEN` only. Tests: `server/ports.test.mjs`.
+
+### Changes
+
+Home → Tools → **Changes**, or the floating **Changes** button in Home's top-left corner (it becomes **‹ Back** on the Changes page). Every git repo directly under the workspace, with its uncommitted edits, in a collapsible left panel:
+each repo is its own collapsible section (files, commit box, push). Pick a file and its diff opens side by side in the wide centre area. Like VS Code's source control, **Keep** stages a file or a single hunk, **Unkeep**
+unstages it (**Keep all** / **Keep tracked** do a whole repo; tracked skips new untracked files), **Discard** reverts it (after a confirmation; the discarded patch is saved under `.claude/pm/discarded/`,
+last 50 kept). Then write a message and **Commit** the kept edits (leave the message empty and the button becomes **Amend (no edit)**: the kept files join the last commit, message unchanged; pm never force-pushes, so amending a pushed commit needs a terminal), and **Push** (confirmation first; if git rejects it, the full error shows in a selectable box with **Copy**; a branch without
+upstream is pushed with `-u` when there is exactly one remote). The panel has a search box and the same **Filter** list as the Home page (shared hide list). Folders that aren't git repos yet sit in a collapsed "Not git repos" group with a **git init** button (asks first; it adds `.git` plus a starter `.gitignore` if there is none: node_modules, venvs, `.env`, …). Each repo row shows ↑ahead ↓behind before its change counts, with **↻** (re-check local changes), **F** (fetch) and **P** (pull); **Fetch all** (top bar) and F update the ↓ behind count, since pm only knows what the last fetch saw; P is `git pull --ff-only`, so a diverged branch or conflicting local edits abort with nothing changed. Plain `git` only, no Claude involved. Untracked files are
+kept or discarded whole; binary files show no hunks. Needs `git` on PATH.
+
+API: `GET /api/changes[/:slug[/diff]]`, `POST /api/changes/:slug/{apply,stage-all,commit,push,fetch,pull,init}`, all loopback or
+`PM_TOKEN` only. Tests: `server/changes.test.mjs`.
+
 ### Continuous (optional)
 
 If a `continuous/` project sits next to `pm/`, a **Continuous** tab shows and controls its
@@ -348,7 +389,7 @@ All optional, via environment variables:
 | `PM_DOCTOR_INTERVAL_MIN` / `PM_DOCTOR_DAYS` | `360` / `14` | Doctor scan period (0 = off) and look-back window |
 | `PM_RELAY_*` | see above | Unattended relay tunables (macOS only) |
 | `CONTINUOUS_ROOT` | `$PM_ROOT/continuous` | Location of the optional runner |
-| `PM_SELF_SLUG` | unset | Project shown in the right-hand side pane (and left out of the card list) |
+| `PM_SELF_SLUG` | unset | Project shown in the right-hand side pane and opened by the ⧉ hover button, and left out of the card list. Defaults to `pm` when that project exists |
 
 ## From your phone (Tailscale + Termius)
 
@@ -377,9 +418,8 @@ cd path/to/pm && PM_ROOT=path/to/workspace npm run tui
 | `r` | jobs: status, age, todos left, latest actions; `s` then `y` stops one |
 | `←` / `h` / `b` / `esc`, `q` | back, quit |
 
-The line above the footer shows your Claude 5h / 7d usage and reset countdowns, read from
-the same status cache as the board's usage view (`~/.claude/vscode-claude-status-cache.json`,
-written by the VS Code extension; marked `(stale)` when old, hidden when absent).
+The line above the footer shows your Claude spend for the current 5h block, today and the last 7 days
+(same figures as the Usage strip on Home and the statusline).
 
 It reads and writes the same Markdown files as the web app (per-todo token counts included)
 and refreshes every few seconds. Todos owned by a live job show `⟳ running` (or `⏸ waiting`

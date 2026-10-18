@@ -32,6 +32,12 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
 - **Parsers round-trip canonical input byte-identically** (`server/backlog.mjs`,
   `server/state.mjs`); tests enforce it. Canonical trailing order on a backlog line:
   `<title>  @seq  p<n>  (date)`.
+- **Never hard-delete a todo.** `writeBacklog` (server/backlog.mjs) diffs the file on disk
+  against what it will write and appends every dropped title to
+  `$PM_ROOT/.claude/backlog-archive/<slug>.md`, and snapshots the previous file to
+  `backlog-archive/.snapshots/` (keep 20/slug). Don't write backlog files any other way.
+  Unknown `##` sections are preserved, not dropped. `backlog-cli.mjs` stays add/move/list:
+  no delete/rename; `add` rejects duplicate exact titles; `move` is exact-title only.
 - **Task ids are positional**, shift after any write. Match by title when it must be stable.
 - **No LLM calls from pm.** It only seeds terminal Claude Code sessions (`server/launch.mjs`).
   Prompt text goes through a temp file / spec file, **never** interpolated into a shell command.
@@ -44,6 +50,8 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
   `tui-run.mjs` -> `launchRelayDetached` (argv spawn, prompt only via spec file; titles
   re-resolved against the live backlog, `ideas` refused, max 20); `s` stops a job through
   `stopRelay` (job-id regex + pid must be alive AND a `relay-cli` process).
+- **Changes tool** (`server/changes.mjs`) runs plain git (argv, stdin message) on repos under `PM_ROOT`, no Claude. Files/hunks must
+  match live `git status`/`diff`; Discard saves a patch to `.claude/pm/discarded/` first. Don't add branch ops or force-push.
 - **Launch routes are guarded**: loopback client or valid `PM_TOKEN`. Everything else is
   unauthenticated by design (meant for a trusted LAN or loopback).
 - **Never write to a real `.claude/` in tests.** Tests and `verify` set `PM_ROOT` to a temp

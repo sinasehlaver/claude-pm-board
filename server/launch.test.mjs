@@ -142,6 +142,16 @@ test("seedForSequentialRun on ideas promotes each into a real pm project", () =>
   assert.doesNotMatch(s, /localhost:4310|vscode-claude-status-cache/);
 });
 
+test("both ideas prompts carry the project / tool / pm feature form decision", () => {
+  const a = seedForTask({ slug: "ideas", title: "x" });
+  const b = seedForSequentialRun({ slug: "ideas", tasks: [{ title: "x", note: null }] });
+  for (const s of [a, b]) {
+    assert.match(s, /pm feature/);
+    assert.match(s, /"kind\\?": \\?"tool\\?"/);
+    assert.match(s, /backlog\/pm\.md/);
+  }
+});
+
 test("seedForSequentialRun on ideas runs prospector first and stops on an adopt verdict", () => {
   const s = seedForSequentialRun({ slug: "ideas", tasks: [{ title: "idea one", note: null }] });
   assert.match(s, /prospector/);
@@ -200,6 +210,10 @@ test("build seed prompts carry the secure-by-default note, ideas research does n
   assert.match(seedForSequentialRun({ slug: "hub", tasks: [{ title: "a" }] }), /SECURE BY DEFAULT/);
   assert.match(seedForCrossProjectRun({ tasks: [{ slug: "hub", title: "a" }] }), /SECURE BY DEFAULT/);
   assert.doesNotMatch(seedForTask({ slug: "ideas", title: "t" }), /SECURE BY DEFAULT/);
+  assert.match(seedForTask({ slug: "hub", title: "t" }), /WEB APP DEFAULTS/);
+  assert.match(seedForSequentialRun({ slug: "hub", tasks: [{ title: "a" }] }), /WEB APP DEFAULTS/);
+  assert.match(seedForCrossProjectRun({ tasks: [{ slug: "hub", title: "a" }] }), /WEB APP DEFAULTS/);
+  assert.doesNotMatch(seedForTask({ slug: "ideas", title: "t" }), /WEB APP DEFAULTS/);
 });
 
 test("seeds tell the session to read and record the Resume block", () => {
@@ -245,4 +259,15 @@ test("build seeds carry the port-registry note; ideas research and audit do not"
   for (const s of [task, seq, cross]) assert.match(s, /\.claude\/ports\.md/);
   assert.doesNotMatch(seedForTask({ slug: "ideas", title: "x" }), /ports\.md/);
   assert.doesNotMatch(seedForSecurityAudit({ slug: "hub" }), /ports\.md/);
+});
+
+test("both ideas prompts check research-only first and forbid promotion for it", () => {
+  const a = seedForTask({ slug: "ideas", title: "x" });
+  const b = seedForSequentialRun({ slug: "ideas", tasks: [{ title: "x", note: null }] });
+  for (const s of [a, b]) {
+    assert.match(s, /RESEARCH-ONLY CHECK/);
+    assert.match(s, /knowledge\/research\/<slug>\.md/);
+    assert.match(s, /Create NO project/);
+    assert.ok(s.indexOf("RESEARCH-ONLY CHECK") < s.indexOf("venturemind"));
+  }
 });

@@ -27,22 +27,20 @@ const press = async (app, keys) => {
 };
 const strip = (s) => s.join("\n");
 
-test("usageLine shows 5h/7d from the statusline cache, tolerates none", () => {
-  const now = Date.now();
-  const u = { utilization5h: 42.4, utilization7d: 91, reset5hAt: new Date(now + 3600_000).toISOString(), stale: true };
-  const line = usageLine(u, now).replace(/\x1b\[[0-9;]*m/g, "");
-  assert.match(line, /^claude 5h 42% ↺.* · 7d 91%.*\(stale\)$/);
+test("usageLine shows 5h/today/7d USD, tolerates none", () => {
+  const line = usageLine({ block: 4.256, today: 10, week: 55.5 }).replace(/\x1b\[[0-9;]*m/g, "");
+  assert.equal(line, "claude 5h $4.26 · today $10.00 · 7d $55.50");
   assert.equal(usageLine(null), null);
-  assert.equal(usageLine({ utilization5h: null, utilization7d: null }), null);
+  assert.equal(usageLine({}), null);
 });
 
 test("view footer carries the usage line only when deps.usage yields data", () => {
   const { app } = mk();
   assert.ok(!app.view(80, 24).join("\n").includes("claude 5h"));
-  const app2 = createApp({ listProjects: async () => [], readBacklog: async () => null, listJobs: async () => [], usage: () => ({ utilization5h: 10, utilization7d: 20 }) });
+  const app2 = createApp({ listProjects: async () => [], readBacklog: async () => null, listJobs: async () => [], usage: () => ({ block: 1, today: 2, week: 3 }) });
   const v = app2.view(80, 24);
   assert.equal(v.length, 24);
-  assert.match(v.join("\n").replace(/\x1b\[[0-9;]*m/g, ""), /claude 5h 10% · 7d 20%/);
+  assert.match(v.join("\n").replace(/\x1b\[[0-9;]*m/g, ""), /claude 5h \$1\.00 · today \$2\.00 · 7d \$3\.00/);
 });
 
 test("wrap breaks at word boundaries and splits overlong words", () => {

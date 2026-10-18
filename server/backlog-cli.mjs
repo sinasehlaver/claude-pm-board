@@ -4,6 +4,7 @@
 // backlog/state through pm's own round-trip-safe parsers instead.
 //   node backlog-cli.mjs move  <slug> <Todo|Doing|Blocked|Done> "<exact title>" ["note"]
 //   node backlog-cli.mjs add   <slug> "<title>" ["note"]
+//   node backlog-cli.mjs list  <slug> [state]            (read-only)
 //   node backlog-cli.mjs state <slug> now "<headline>" ["detail" ...]
 //   node backlog-cli.mjs state <slug> resume <last-result|re-run|branch|artifacts> "<value>"
 // Root = $PM_ROOT, else the current directory (server/paths.mjs).
@@ -21,7 +22,8 @@ export async function moveTask(slug, state, title, note) {
   if (!STATES.includes(state)) throw new Error(`state must be one of ${STATES.join("|")}`);
   const b = await readBacklog(slug);
   if (!b) throw new Error(`no backlog for "${slug}"`);
-  const t = b.tasks.find((x) => x.title === title.trim());
+  // exact match only: move never renames, and never creates a task
+  const t = b.tasks.find((x) => x.title === title);
   if (!t) throw new Error(`no task with that exact title in ${slug}`);
   t.state = state;
   t.done = state === "Done" ? t.done || today() : null;
@@ -34,9 +36,20 @@ export async function addTask(slug, title, note) {
   if (!SLUG.test(slug)) throw new Error(`bad slug "${slug}"`);
   const b = await readBacklog(slug);
   if (!b) throw new Error(`no backlog for "${slug}"`);
-  b.tasks.push({ id: b.tasks.length, state: "Todo", title: title.trim(), note: note?.trim() || null, priority: null, done: null, seq: false });
+  title = String(title).trim();
+  if (!title || /[\r\n]/.test(title)) throw new Error("title must be one non-empty line");
+  if (b.tasks.some((x) => x.title === title)) throw new Error(`duplicate title in ${slug}: "${title.slice(0, 60)}"`);
+  b.tasks.push({ id: b.tasks.length, state: "Todo", title, note: note?.trim() || null, priority: null, done: null, seq: false });
   await writeBacklog(slug, b);
-  return `${slug}: added "${title.trim().slice(0, 60)}" to Todo`;
+  return `${slug}: added "${title.slice(0, 60)}" to Todo`;
+}
+
+export async function listTasks(slug, state) {
+  if (!SLUG.test(slug)) throw new Error(`bad slug "${slug}"`);
+  if (state && !STATES.includes(state)) throw new Error(`state must be one of ${STATES.join("|")}`);
+  const b = await readBacklog(slug);
+  if (!b) throw new Error(`no backlog for "${slug}"`);
+  return b.tasks.filter((t) => !state || t.state === state).map((t) => `${t.state}\t${t.title}`).join("\n");
 }
 
 export async function setNow(slug, headline, details = []) {
@@ -63,10 +76,11 @@ export async function main(argv) {
   const [cmd, slug, ...rest] = argv;
   if (cmd === "move" && rest.length >= 2) return moveTask(slug, rest[0], rest[1], rest[2]);
   if (cmd === "add" && (rest.length === 1 || rest.length === 2)) return addTask(slug, rest[0], rest[1]);
+  if (cmd === "list" && rest.length <= 1) return listTasks(slug, rest[0]);
   if (cmd === "state" && rest[0] === "now" && rest.length >= 2) return setNow(slug, rest[1], rest.slice(2));
   if (cmd === "state" && rest[0] === "resume" && rest.length === 3) return setResume(slug, rest[1], rest[2]);
   throw new Error(
-    'usage: move <slug> <Todo|Doing|Blocked|Done> "<exact title>" ["note"] | add <slug> "<title>" ["note"] | state <slug> now "<headline>" ["detail"...] | state <slug> resume <last-result|re-run|branch|artifacts> "<value>"',
+    'usage: list <slug> [state] | move <slug> <Todo|Doing|Blocked|Done> "<exact title>" ["note"] | add <slug> "<title>" ["note"] | state <slug> now "<headline>" ["detail"...] | state <slug> resume <last-result|re-run|branch|artifacts> "<value>"',
   );
 }
 

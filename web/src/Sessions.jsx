@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ago, send } from "./api";
+import { alertDialog } from "./dialog.jsx";
 
 const NEW = "__new__";
 
@@ -54,7 +55,7 @@ function Row({ s, slugs, reload, filed }) {
       await send(method, path, body);
       reload();
     } catch (e) {
-      alert(e.message);
+      alertDialog(e.message);
     }
   };
   return (

@@ -1,18 +1,18 @@
-// .claude/entries.json: { "<slug>": { "kind": "benchmark"|"tool", "path": "<rel to PM_ROOT>" } }.
-// Benchmarks/tools are tracked like projects (state + backlog) but live anywhere under
+// .claude/entries.json: { "<slug>": { "kind": "tool", "path": "<rel to PM_ROOT>" } }.
+// Tools are tracked like projects (state + backlog) but live anywhere under
 // PM_ROOT, so their slug need not equal a folder name. A slug with no entry is a project
 // whose folder is PM_ROOT/<slug>.
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { PM_ROOT, CLAUDE } from "./paths.mjs";
 
-export const KINDS = ["project", "benchmark", "tool"];
+export const KINDS = ["project", "tool"];
 
 export function readEntries() {
   try {
     const raw = JSON.parse(readFileSync(join(CLAUDE, "entries.json"), "utf8"));
     return Object.fromEntries(
-      Object.entries(raw).filter(([, e]) => ["benchmark", "tool"].includes(e?.kind) && typeof e.path === "string"),
+      Object.entries(raw).filter(([, e]) => e?.kind === "tool" && typeof e.path === "string"),
     );
   } catch {
     return {};

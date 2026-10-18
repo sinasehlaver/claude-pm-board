@@ -64,9 +64,43 @@ export function seedForTask({ slug, title, note, adhoc }) {
       "",
       RESUME_NOTE,
     );
-  out.push("", SECURITY_NOTE, PORT_NOTE);
+  out.push("", SECURITY_NOTE, PORT_NOTE, WEBAPP_NOTE);
   return out.join("\n");
 }
+
+// Where a Build / Adopt + extend idea ends up. Shared by the ▶ research and ▶▶ promotion prompts.
+const FORM_NOTE = [
+  "FORM — before planning, decide what this idea becomes. Prospector states a",
+  "provisional form in its verdict; atelier's Step 0 (frame) confirms or overrides it",
+  "and records the final form and why at the top of its report:",
+  "- project: a standalone app or system with its own roadmap (own folder, state, backlog).",
+  "- tool: single-purpose, buildable in about one session, no ongoing roadmap, and with",
+  "  no UI of its own beyond a CLI/script or a pm Tools page. It is still a full project",
+  "  (folder, state, backlog) plus a `.claude/entries.json` row",
+  "  `\"<slug>\": {\"kind\": \"tool\", \"path\": \"<slug>\"}` (merge into the file, keep other rows),",
+  "  which lists it under the collapsible \"tools\" group on the Projects tab.",
+  "- pm feature: a part of the pm app itself (like the Claude usage strip or the Ideas",
+  "  inbox) — design it against pm's stack and UI tokens (files are the database, no LLM",
+  "  calls). It is NOT a new project: no folder, no state file, no entries row.",
+  "When in doubt, project beats tool, and tool beats pm feature.",
+].join("\n");
+
+// Branch 0 of both Ideas triages: an idea that asks to be understood or brainstormed is
+// not an idea to build. Without this, every inbox item was forced into build-vs-adopt
+// and auto-promoted into a project (shiftlead, 2026-10-18).
+const RESEARCH_ONLY_NOTE = [
+  "RESEARCH-ONLY CHECK — before any triage below: does the idea ask for research,",
+  "ideas, a survey, a comparison, or an explanation (\"what could I build\", \"find",
+  "ideas for\", \"how do X do Y\", \"look into\") rather than name one specific thing to",
+  "have built? If so, it is NOT a build request: do the research with WebSearch",
+  "(sourced, pricing/licence only from pages you looked up), write a findings doc",
+  "with several developed options to `knowledge/research/<slug>.md` (+ a one-line",
+  "pointer in knowledge/INDEX.md), add ONE indented note line under the idea's bullet",
+  "in `.claude/backlog/ideas.md` pointing at it, and STOP. Leave the bullet in Todo",
+  "(un-flag any @seq marker). Create NO project, state file, backlog file or scaffold,",
+  "and do not run any build-vs-adopt or planning skill. The user picks an option and",
+  "promotes it themselves. If it is genuinely ambiguous, treat it as research-only.",
+].join("\n");
 
 // Seed prompt for a single ▶ Run on an Ideas-inbox item: research only, stop
 // short of building. You are the idea's future developer, not its builder yet.
@@ -85,6 +119,8 @@ function seedForIdeaResearch({ title, note }) {
   if (note) out.push("", note);
   out.push(
     "",
+    RESEARCH_ONLY_NOTE,
+    "",
     "TRIAGE — ordered, take the first branch that fits:",
     "1. Genuine business/venture concept (a monetizable market play, not just",
     "   \"this could theoretically be a product\") -> invoke the `venturemind`",
@@ -101,6 +137,8 @@ function seedForIdeaResearch({ title, note }) {
     "     aesthetic bar, phased plan) — do NOT run its Step 6 (Build). Feed",
     "     prospector's findings in as atelier's Step 0/1 input instead of",
     "     re-searching from scratch.",
+    FORM_NOTE,
+    "",
     "This is a one-shot session with no follow-up turn, so state assumptions and",
     "proceed rather than stalling on a question nobody can answer (prospector and",
     "atelier both end turns with a question — answer it yourself with your best",
@@ -117,8 +155,13 @@ function seedForIdeaResearch({ title, note }) {
     "  under this idea's bullet in `.claude/backlog/ideas.md` (match it by its title",
     "  text), e.g. \"adopt <tool>, not built — see knowledge/prospector/<slug>.md\" (or",
     "  the venturemind save path). Leave the idea in Todo — the user decides next.",
-    "- Build or Adopt + extend verdict (atelier ran Steps 0-5): PROMOTE the idea into",
-    "  a real pm project so it shows on the Home board. Do not build it (no Step 6,",
+    "- Build or Adopt + extend verdict, form \"pm feature\": do NOT create a project. Add ONE",
+    "  human-voice todo to `.claude/backlog/pm.md` (e.g. \"Build the <thing>, tell me how to",
+    "  test it, and wait for me to test it\") with one indented note line pointing at",
+    "  knowledge/atelier/<file>.md, then remove the idea's bullet from ideas.md.",
+    "- Build or Adopt + extend verdict, form \"project\" or \"tool\" (atelier ran Steps 0-5):",
+    "  PROMOTE the idea into a real pm project so it shows on the Home board. For a tool,",
+    "  also add its entries.json row (see FORM). Do not build it (no Step 6,",
     "  no PM_ROOT/<slug>/ scaffold) — only the pm bookkeeping:",
     "  1. Pick the project slug = a short, memorable kebab-case product name (the",
     "     name you'd suggest for the app, not a sentence from the idea). Check",
@@ -159,6 +202,14 @@ const PORT_NOTE =
   "PORTS — before choosing or changing a dev-server port, read .claude/ports.md (the local port registry, if it " +
   "exists) and take the next free pair, bind 127.0.0.1, and add your row there in the same change. " +
   "Never reuse another project's port or a framework default (3000/5173/8000).";
+
+// New or restyled web UIs start from the author's shared defaults instead of re-specifying them each time.
+// Both paths are workspace files; the note is a no-op for a bare clone.
+const WEBAPP_NOTE =
+  "WEB APP DEFAULTS — for a new or substantially changed web UI, read the workspace rule _webapp-defaults.md (if it " +
+  "exists) and start from the _starter/ kit: light/dark/system theme, collapsible lists and panels, " +
+  "edit/delete/reorder on list items, undo/redo, save/open file, back button, toasts, shortcuts. " +
+  "Don't re-ask for these; only note deliberate deviations in the project's rules file.";
 
 // Seed prompt for the per-project "Security audit" button: one interactive session that
 // runs the workspace security-guard skill (static audit + generated tests, no live probing).
@@ -356,6 +407,7 @@ export function seedForSequentialRun({ slug, tasks, adhoc, mode = "seq", relay =
     "",
     SECURITY_NOTE,
     PORT_NOTE,
+    WEBAPP_NOTE,
     "",
     adhoc
       ? `When all todos are done or blocked, update .claude/backlog/${slug}.md and summarise what shipped, what was deferred, and why.`
@@ -410,6 +462,7 @@ export function seedForCrossProjectRun({ tasks, relay = false }) {
     "",
     SECURITY_NOTE,
     PORT_NOTE,
+    WEBAPP_NOTE,
     "",
     "When all todos are done or blocked, summarise per project what shipped, what was deferred, and why.",
   ];
@@ -438,6 +491,9 @@ function seedForIdeaPromotion({ tasks, relay = false }) {
     "they'd become the same project, merge them into one subagent instead of creating",
     "duplicates and say so in your final summary.",
     "",
+    RESEARCH_ONLY_NOTE,
+    "(Applies per idea: a research-only idea gets its findings doc and nothing else.)",
+    "",
     "Each subagent must:",
     "1. Pick a kebab-case slug from the idea's title. Check .claude/backlog/ and",
     "   .claude/state/ for collisions; on collision append -2, -3, ...",
@@ -462,6 +518,10 @@ function seedForIdeaPromotion({ tasks, relay = false }) {
     "        to fill) -> continue into the `atelier` skill and run its FULL workflow,",
     "        including Step 6 (Build) below. Feed prospector's findings in as its",
     "        Step 0/1 input rather than re-searching.",
+    ...FORM_NOTE.split("\n").map((l) => "   " + l),
+    "   Form \"pm feature\": skip steps 3 and 4's project files - add ONE human-voice todo to",
+    "   .claude/backlog/pm.md pointing at the plan, and remove the idea's bullet.",
+    "   Form \"tool\": step 3 as for a project, plus the entries.json row.",
     "   This is a one-shot session with no follow-up turn - state assumptions and",
     "   proceed all the way through rather than stalling on an unanswerable question",
     "   (prospector and atelier both end turns with a question - answer it yourself).",

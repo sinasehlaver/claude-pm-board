@@ -4,7 +4,7 @@
 //
 // The server still reads the live workspace files under PM_ROOT
 // (default ~/Projects for the packaged app), exactly as under `npm run dev`.
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, globalShortcut, screen, shell } = require("electron");
 const { fork } = require("node:child_process");
 
 // If the shell that launched us had ELECTRON_RUN_AS_NODE set, Electron booted as
@@ -17,6 +17,87 @@ if (!app || typeof app.whenReady !== "function") {
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
+const fs = require("node:fs");
+const { HOVER_MIN, sanitizePrefs, hoverBounds } = require("./hover.cjs");
+
+const HOVER_KEY = "CommandOrControl+Alt+P";
+let prefs = { hover: false, hoverBounds: null };
+let normalBounds = null;
+let prefsFile = "";
+
+function loadPrefs() {
+  prefsFile = path.join(app.getPath("userData"), "shell-prefs.json");
+  try {
+    prefs = sanitizePrefs(JSON.parse(fs.readFileSync(prefsFile, "utf8")));
+  } catch {
+    prefs = sanitizePrefs(null);
+  }
+}
+
+function savePrefs() {
+  try {
+    fs.writeFileSync(prefsFile, JSON.stringify(prefs));
+  } catch (e) {
+    console.error("could not save shell prefs:", e.message);
+  }
+}
+
+// Hover mode: a compact always-on-top copy of the same window that follows you
+// across spaces and over fullscreen apps. Normal size is restored on exit.
+function applyHover(on) {
+  if (!win) return;
+  if (on) {
+    normalBounds = win.getBounds();
+    win.setMinimumSize(HOVER_MIN.width, HOVER_MIN.height);
+    win.setBounds(hoverBounds(prefs.hoverBounds, screen.getAllDisplays().map((d) => d.workArea)));
+    win.setAlwaysOnTop(true, "floating");
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  } else {
+    if (win.isAlwaysOnTop()) prefs.hoverBounds = win.getBounds();
+    win.setAlwaysOnTop(false);
+    win.setVisibleOnAllWorkspaces(false);
+    win.setMinimumSize(720, 480);
+    if (normalBounds) win.setBounds(normalBounds);
+  }
+  prefs.hover = on;
+  savePrefs();
+}
+
+function toggleHover() {
+  if (!win) return;
+  applyHover(!prefs.hover);
+  buildMenu();
+  win.webContents.send("hover:changed", prefs.hover);
+}
+
+function toggleVisible() {
+  if (!win) return;
+  if (win.isVisible() && win.isFocused()) win.hide();
+  else {
+    win.show();
+    win.focus();
+  }
+}
+
+function buildMenu() {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      { role: "appMenu" },
+      { role: "editMenu" },
+      {
+        label: "View",
+        submenu: [
+          { label: "Hover mode", type: "checkbox", checked: prefs.hover, accelerator: "CommandOrControl+Shift+H", click: toggleHover },
+          { label: "Show / hide PM", accelerator: HOVER_KEY, registerAccelerator: false, click: toggleVisible },
+          { type: "separator" },
+          { role: "reload" },
+          { role: "togglefullscreen" },
+        ],
+      },
+      { role: "windowMenu" },
+    ]),
+  );
+}
 
 const ROOT = path.join(__dirname, "..");
 let server = null;
@@ -91,7 +172,8 @@ function createWindow() {
     minHeight: 480,
     title: "PM",
     backgroundColor: "#0b0b0c",
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    show: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, "preload.cjs") },
   });
   win.loadURL(`http://127.0.0.1:${serverPort}/`);
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -102,6 +184,21 @@ function createWindow() {
   win.on("closed", () => {
     win = null;
   });
+  let saveTimer = null;
+  const rememberSpot = () => {
+    if (!prefs.hover || !win) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      if (win && prefs.hover) {
+        prefs.hoverBounds = win.getBounds();
+        savePrefs();
+      }
+    }, 400);
+  };
+  win.on("moved", rememberSpot);
+  win.on("resized", rememberSpot);
+  if (prefs.hover) win.once("ready-to-show", () => applyHover(true));
+  win.once("ready-to-show", () => win && win.show());
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -116,8 +213,16 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     try {
+      loadPrefs();
+      ipcMain.handle("hover:get", () => prefs.hover);
+      ipcMain.handle("hover:toggle", () => {
+        toggleHover();
+        return prefs.hover;
+      });
+      buildMenu();
       await startServer();
       createWindow();
+      globalShortcut.register(HOVER_KEY, toggleVisible);
       app.on("activate", () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
       });
@@ -133,6 +238,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on("before-quit", () => {
     app.isQuitting = true;
+    globalShortcut.unregisterAll();
     if (server) server.kill();
   });
 }

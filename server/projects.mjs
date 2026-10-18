@@ -114,7 +114,7 @@ async function newestHandoff(slug) {
   }
 }
 
-// kind: "project" (default; every slug without an entry), "benchmark", "tool", or "all".
+// kind: "project" (default; every slug without an entry), "tool", or "all".
 export async function listProjects(kind = "project") {
   const { all: every, rules } = await discoverSlugs();
   const all = kind === "all" ? every : every.filter((s) => kindOf(s) === kind);

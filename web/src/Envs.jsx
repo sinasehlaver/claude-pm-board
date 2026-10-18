@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { get, send } from "./api";
+import { confirmDialog } from "./dialog.jsx";
 
 function Row({ v, reload }) {
   const [val, setVal] = useState("");
@@ -16,7 +17,7 @@ function Row({ v, reload }) {
       const pre = await send("POST", "/envs/update", { name: v.name, value: val, files, dryRun: true });
       const list = pre.files.filter((f) => f.changed).map((f) => f.file);
       if (!list.length) setMsg("already that value everywhere");
-      else if (window.confirm(`Update ${v.name} in ${list.length} files?\n\n${list.join("\n")}\n\n(each gets a .bak-<ts> copy)`)) {
+      else if (await confirmDialog({ title: `Update ${v.name}?`, body: `${list.length} files:\n${list.join("\n")}\n\n(each gets a .bak-<ts> copy)`, confirmLabel: "Update" })) {
         const r = await send("POST", "/envs/update", { name: v.name, value: val, files });
         setMsg(`updated ${r.changed} files`);
         setVal("");

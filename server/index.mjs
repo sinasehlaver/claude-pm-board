@@ -3,10 +3,10 @@ import { existsSync, watch, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PM_ROOT, CLAUDE, STATE_DIR, BACKLOG_DIR } from "./paths.mjs";
-import { listProjects, getProject } from "./projects.mjs";
+import { listProjects, getProject, discoverSlugs } from "./projects.mjs";
 import { KINDS, entryDir } from "./entries.mjs";
 import { readState, writeState } from "./state.mjs";
-import { readBacklog, writeBacklog, emptyBacklog, runnableTasks } from "./backlog.mjs";
+import { readBacklog, writeBacklog, emptyBacklog, runnableTasks, readArchive, restoreTask } from "./backlog.mjs";
 import { listSessions, fileSession, sessionToTask, sessionToNewProject, moveTask } from "./sessions.mjs";
 import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForDoctorFinding, seedForDoctorFindings, launchClaude, launchRelay } from "./launch.mjs";
 import { listRelayJobs, relayDir, dismissRelay } from "./relay.mjs";
@@ -15,17 +15,11 @@ import { taskTokens } from "./tokens.mjs";
 import { openFile } from "./open.mjs";
 import { harvest as runHarvest } from "./harvest.mjs";
 import { scanEnvs, updateEnv } from "./envs.mjs";
+import { listPorts, killPort } from "./ports.mjs";
+import * as changes from "./changes.mjs";
 import { resolveHost, tokenMatches } from "./bind.mjs";
 import { readDoctor, scanAndCache, startDoctorTimer, withStatuses, setStatus, verifyFinding, FINDING_STATUSES, NOTE_MAX } from "./doctor.mjs";
-import {
-  burnSnapshot,
-  burnBreakdown,
-  summary,
-  accountRateLimitStatus,
-  paceBreakdown,
-  PACE_WINDOW_MS,
-  writeUsageLimitsWindow,
-} from "./usage.mjs";
+import { statuslineUsageCached } from "./statusline-usage.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4500;
@@ -48,9 +42,18 @@ app.use("/api", (req, res, next) => {
   next();
 });
 
-app.get("/api/health", (_req, res) => res.json({ ok: true, root: PM_ROOT, self: process.env.PM_SELF_SLUG || null }));
+// The board's own project: PM_SELF_SLUG, else "pm" when that project exists. Left out of the card list;
+// the hover button opens its page.
+app.get("/api/health", async (_req, res, next) => {
+  try {
+    const self = process.env.PM_SELF_SLUG || ((await discoverSlugs()).all.includes("pm") ? "pm" : null);
+    res.json({ ok: true, root: PM_ROOT, self });
+  } catch (e) {
+    next(e);
+  }
+});
 
-// ?kind=project (default) | benchmark | tool | all  (see server/entries.mjs)
+// ?kind=project (default) | tool | all  (see server/entries.mjs)
 app.get("/api/projects", async (req, res, next) => {
   try {
     const kind = req.query.kind || "project";
@@ -161,6 +164,29 @@ app.delete("/api/projects/:slug/tasks/:id", async (req, res, next) => {
     await writeBacklog(slug, bl);
     res.json(await getProject(slug));
   } catch (e) {
+    next(e);
+  }
+});
+
+// Removal never deletes: writeBacklog archives dropped tasks to backlog-archive/<slug>.md.
+app.get("/api/projects/:slug/archive", async (req, res, next) => {
+  try {
+    if (!SLUG_RE.test(req.params.slug)) return res.status(400).json({ error: "bad slug" });
+    res.json({ items: await readArchive(req.params.slug) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+app.post("/api/projects/:slug/archive/restore", async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug)) return res.status(400).json({ error: "bad slug" });
+    await restoreTask(slug, String(req.body?.title ?? ""));
+    res.json(await getProject(slug));
+  } catch (e) {
+    if (/no such archived/.test(e.message)) return res.status(404).json({ error: e.message });
+    if (/already in backlog/.test(e.message)) return res.status(409).json({ error: e.message });
     next(e);
   }
 });
@@ -363,42 +389,12 @@ app.post("/api/tasks/move", async (req, res, next) => {
   }
 });
 
-// --- usage / burn rate -------------------------------------------------
-app.get("/api/usage/burn", async (_req, res, next) => {
+// --- usage: the statusline's USD numbers (5h block / today / 7d) ---------
+app.get("/api/usage", (_req, res, next) => {
   try {
-    const breakdown = await burnBreakdown();
-    breakdown.pace = await paceBreakdown();
-    res.json({
-      ...(await burnSnapshot()),
-      breakdown,
-      paceWindowMs: PACE_WINDOW_MS,
-      limits: await accountRateLimitStatus(),
-    });
+    res.json(statuslineUsageCached());
   } catch (e) {
     next(e);
-  }
-});
-
-app.get("/api/usage/summary", async (req, res, next) => {
-  try {
-    const bucket = req.query.bucket === "hour" ? "hour" : "day";
-    const days = Math.min(Number(req.query.days) || 14, 90);
-    res.json(await summary({ bucket, days }));
-  } catch (e) {
-    next(e);
-  }
-});
-
-// window: "5h"|"7d"|"30d"; body: { mode?, manualCapTokens? } — a manual value
-// persists exactly as set until this route (or a manual re-edit) changes it,
-// unauthenticated like the rest of pm (matches hub/).
-app.put("/api/usage/limits/:window", async (req, res, next) => {
-  try {
-    const { mode, manualCapTokens } = req.body || {};
-    const cfg = writeUsageLimitsWindow(req.params.window, { mode, manualCapTokens });
-    res.json(cfg);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
   }
 });
 
@@ -480,6 +476,48 @@ app.post("/api/open", async (req, res, next) => {
     next(e);
   }
 });
+
+// --- ports: listening TCP ports + stop the owning process (both need loopback/PM_TOKEN) ---
+app.get("/api/ports", async (req, res, next) => {
+  try {
+    if (!canLaunch(req)) return res.status(403).json({ error: "ports need loopback or PM_TOKEN" });
+    res.json({ ports: await listPorts() });
+  } catch (e) {
+    next(e);
+  }
+});
+app.post("/api/ports/kill", async (req, res, next) => {
+  try {
+    if (!canLaunch(req)) return res.status(403).json({ error: "ports need loopback or PM_TOKEN" });
+    const { pid, port } = req.body || {};
+    res.json({ ok: true, ...(await killPort(pid, port)) });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  }
+});
+
+// --- changes: git edits across repos, keep/discard per hunk, commit, push (all need loopback/PM_TOKEN) ---
+const changeRoute = (method, path, fn) =>
+  app[method](path, async (req, res, next) => {
+    try {
+      if (!canLaunch(req)) return res.status(403).json({ error: "changes need loopback or PM_TOKEN" });
+      res.json(await fn(req));
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message });
+      next(e);
+    }
+  });
+changeRoute("get", "/api/changes", () => changes.listRepos().then((repos) => ({ repos })));
+changeRoute("get", "/api/changes/:slug", (req) => changes.repoStatus(req.params.slug));
+changeRoute("get", "/api/changes/:slug/diff", (req) => changes.fileDiff(req.params.slug, String(req.query.path ?? ""), req.query.side));
+changeRoute("post", "/api/changes/:slug/apply", (req) => changes.applyChange(req.params.slug, req.body || {}));
+changeRoute("post", "/api/changes/:slug/stage-all", (req) => changes.stageAll(req.params.slug, req.body?.on !== false, req.body?.tracked === true));
+changeRoute("post", "/api/changes/:slug/fetch", (req) => changes.fetchRepo(req.params.slug));
+changeRoute("post", "/api/changes/:slug/pull", (req) => changes.pullRepo(req.params.slug));
+changeRoute("post", "/api/changes/:slug/init", (req) => changes.initRepo(req.params.slug));
+changeRoute("post", "/api/changes/:slug/commit", (req) => changes.commit(req.params.slug, req.body?.message, req.body?.amend === true));
+changeRoute("post", "/api/changes/:slug/push", (req) => changes.push(req.params.slug));
 
 // --- env manager (masked values only; read and write need loopback/PM_TOKEN) ---
 app.get("/api/envs", async (req, res, next) => {

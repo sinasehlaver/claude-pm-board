@@ -1,4 +1,5 @@
 import { send } from "./api";
+import { alertDialog } from "./dialog.jsx";
 
 // Same extensions the server will open (server/open.mjs OPEN_EXT).
 const PATH_RE = /(?<![\w:/.~@+-])((?:~\/|\/|\.{0,2}\/)?[\w@.+-]+(?:\/[\w@.+ -]+)*\.(?:pdf|xlsx|xls|csv|ipynb|html?|md|txt|json|docx|pptx|png|jpe?g|svg))(?![\w/])/gi;
@@ -10,7 +11,7 @@ export function OpenBtn({ path, slug }) {
       title={"open " + path}
       onClick={(e) => {
         e.stopPropagation();
-        send("POST", "/open", { path, slug }).catch((err) => alert("Can't open " + path + ": " + err.message));
+        send("POST", "/open", { path, slug }).catch((err) => alertDialog("Can't open " + path + ": " + err.message));
       }}
     >
       open

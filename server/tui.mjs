@@ -5,7 +5,7 @@ import { readBacklog } from "./backlog.mjs";
 import { addTask, moveTask } from "./backlog-cli.mjs";
 import { listRelayJobs } from "./relay.mjs";
 import { readTaskTokens } from "./tokens.mjs";
-import { rateLimitStatus } from "./usage.mjs";
+import { statuslineUsageCached } from "./statusline-usage.mjs";
 import { PM_ROOT } from "./paths.mjs";
 import { runTodos, stopJob } from "./tui-run.mjs";
 import { createApp, parseKeys } from "./tui-core.mjs";
@@ -24,7 +24,7 @@ const app = createApp({
   stopJob,
   listJobs: () => listRelayJobs(PM_ROOT),
   tokens: readTaskTokens,
-  usage: rateLimitStatus,
+  usage: statuslineUsageCached,
 });
 
 const out = process.stdout;

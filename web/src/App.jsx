@@ -3,8 +3,9 @@ import { get, onStream } from "./api";
 import Home from "./Home.jsx";
 import Project from "./Project.jsx";
 import Sessions from "./Sessions.jsx";
-import Usage from "./Usage.jsx";
 import Doctor from "./Doctor.jsx";
+import Ports from "./Ports.jsx";
+import Changes from "./Changes.jsx";
 import Envs from "./Envs.jsx";
 import Help from "./Help.jsx";
 
@@ -36,28 +37,75 @@ function ThemeToggle() {
   );
 }
 
+// Hover button. Desktop shell: window.pmShell (electron/preload.cjs) shrinks the window and pins it on top.
+// Browser: Document Picture-in-Picture (Chromium) floats a second always-on-top window showing this app in an
+// iframe (state is shared via localStorage); other browsers get a plain small popup. Hidden inside that iframe.
+function HoverToggle({ selfSlug }) {
+  const shell = window.pmShell;
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    if (!shell) return;
+    shell.getHover().then(setOn);
+    return shell.onHover(setOn);
+  }, [shell]);
+  if (window.self !== window.top) return null;
+  const pip = window.documentPictureInPicture;
+  const openFloat = async () => {
+    if (pip?.window) {
+      pip.window.close();
+      setOn(false);
+      return;
+    }
+    const src = location.origin + (selfSlug ? "/project/" + encodeURIComponent(selfSlug) : "/");
+    if (!pip) {
+      window.open(src, "pm-hover", "popup,width=420,height=640");
+      return;
+    }
+    const w = await pip.requestWindow({ width: 420, height: 640 });
+    const f = w.document.createElement("iframe");
+    f.src = src;
+    f.style.cssText = "border:0;width:100vw;height:100vh;display:block";
+    w.document.body.style.margin = "0";
+    w.document.body.append(f);
+    w.addEventListener("pagehide", () => setOn(false));
+    setOn(true);
+  };
+  return (
+    <button
+      className={"theme-toggle" + (on ? " on" : "")}
+      title={on ? "Leave hover mode" : "Hover mode: compact, always on top"}
+      onClick={() => (shell ? shell.toggleHover().then(setOn) : openFloat().catch(() => {}))}
+    >
+      ⧉
+    </button>
+  );
+}
+
 // URL <-> {view, sel} — hand-rolled, no router lib. Paths:
 //   "/"               -> home
 //   "/sessions"        -> sessions
-//   "/usage"           -> usage
 //   "/doctor"          -> doctor
 //   "/envs"            -> env manager
+//   "/ports"           -> listening ports
+//   "/changes"         -> git changes across repos
 //   "/project/<slug>"  -> project view for slug
 function parsePath(pathname) {
   const parts = pathname.split("/").filter(Boolean);
   if (parts[0] === "project" && parts[1]) return { view: "home", sel: decodeURIComponent(parts[1]) };
   if (parts[0] === "sessions") return { view: "sessions", sel: null };
-  if (parts[0] === "usage") return { view: "usage", sel: null };
   if (parts[0] === "doctor") return { view: "doctor", sel: null };
   if (parts[0] === "envs") return { view: "envs", sel: null };
+  if (parts[0] === "ports") return { view: "ports", sel: null };
+  if (parts[0] === "changes") return { view: "changes", sel: null };
   return { view: "home", sel: null };
 }
 function pathFor(view, sel) {
   if (sel) return "/project/" + encodeURIComponent(sel);
   if (view === "sessions") return "/sessions";
-  if (view === "usage") return "/usage";
   if (view === "doctor") return "/doctor";
   if (view === "envs") return "/envs";
+  if (view === "ports") return "/ports";
+  if (view === "changes") return "/changes";
   return "/";
 }
 
@@ -65,7 +113,7 @@ export default function App() {
   const [projects, setProjects] = useState(null);
   const [sessions, setSessions] = useState({ inbox: [], filed: [] });
   const initial = parsePath(window.location.pathname);
-  const [view, setView] = useState(initial.view); // "home" | "sessions" | "usage"
+  const [view, setView] = useState(initial.view); // "home" | "sessions"
   const [sel, setSel] = useState(initial.sel);
   const [detail, setDetail] = useState(null);
   const fromPopstate = useRef(false);
@@ -146,12 +194,14 @@ export default function App() {
       onOpen={setSel}
       reload={loadSessions}
     />
-  ) : view === "usage" ? (
-    <Usage onBack={() => setView("home")} />
   ) : view === "doctor" ? (
     <Doctor onBack={() => setView("home")} />
   ) : view === "envs" ? (
     <Envs onBack={() => setView("home")} />
+  ) : view === "ports" ? (
+    <Ports onBack={() => setView("home")} />
+  ) : view === "changes" ? (
+    <Changes onBack={() => setView("home")} />
   ) : (
     <Home
       projects={projects}
@@ -159,15 +209,19 @@ export default function App() {
       selfSlug={selfSlug}
       onOpen={setSel}
       onSessions={() => setView("sessions")}
-      onUsage={() => setView("usage")}
       onDoctor={() => setView("doctor")}
       onEnvs={() => setView("envs")}
+      onPorts={() => setView("ports")}
+      onChanges={() => setView("changes")}
       reload={loadList}
     />
   );
 
   return (
     <>
+      <div className="theme-toggle-fixed hover-fixed">
+        <HoverToggle selfSlug={selfSlug} />
+      </div>
       <div className="theme-toggle-fixed">
         <ThemeToggle />
         <Help
@@ -176,6 +230,16 @@ export default function App() {
         />
       </div>
       {body}
+      {!sel && view === "home" && (
+        <button className="pm-pane-toggle chg-fab" onClick={() => setView("changes")} title="Uncommitted changes in every repo: keep, discard, commit, push">
+          Changes
+        </button>
+      )}
+      {!sel && view === "changes" && (
+        <button className="pm-pane-toggle chg-fab" onClick={() => setView("home")} title="Back to the board">
+          ‹ Back
+        </button>
+      )}
       {selfSlug && (
         <button className={"pm-pane-toggle" + (pmOpen ? " on" : "")} aria-pressed={pmOpen} onClick={() => setPmOpen(!pmOpen)} title={`${selfSlug}: its todos and state, open next to whatever you are doing`}>
           {selfSlug}

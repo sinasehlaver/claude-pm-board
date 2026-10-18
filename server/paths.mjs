@@ -14,6 +14,7 @@ export const CLAUDE = join(PM_ROOT, ".claude");
 export const STATE_DIR = join(CLAUDE, "state");
 export const RULES_DIR = join(CLAUDE, "rules");
 export const BACKLOG_DIR = join(CLAUDE, "backlog");
+export const BACKLOG_ARCHIVE_DIR = join(CLAUDE, "backlog-archive");
 export const HANDOFFS_DIR = join(CLAUDE, "handoffs");
 export const PM_DIR = join(CLAUDE, "pm");
 export const ACTIVITY_FILE = join(PM_DIR, "activity.json");
