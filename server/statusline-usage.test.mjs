@@ -40,3 +40,13 @@ test("statuslineUsage: block is 0 once 5h pass with no new messages", () => {
   assert.equal(u.block, 0);
   assert.equal(u.blockEndsAt, null);
 });
+
+test("statuslineUsage: per-file cache picks up appended rows and dropped files", () => {
+  const f = join(root, "p1", "b.jsonl");
+  const before = statuslineUsage(now).week;
+  writeFileSync(f, row("z", 1 * H, { input_tokens: 1_000_000 })); // +$2
+  assert.equal((statuslineUsage(now).week - before).toFixed(2), "2.00");
+  writeFileSync(f, row("z", 1 * H, { input_tokens: 1_000_000 }) + row("y", 1 * H, { input_tokens: 1_000_000 })); // grew
+  assert.equal((statuslineUsage(now).week - before).toFixed(2), "4.00");
+  assert.equal(statuslineUsage(now).week, statuslineUsage(now).week); // unchanged files hit the cache
+});

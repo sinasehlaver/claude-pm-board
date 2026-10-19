@@ -122,6 +122,7 @@ export default function App() {
   const [pmOpen, setPmOpen] = useState(false);
   const [pmDetail, setPmDetail] = useState(null);
 
+  const pingTimer = useRef(0);
   const loadList = useCallback(() => get("/projects?kind=all").then(setProjects), []);
   const loadPm = useCallback(() => selfSlug && get("/projects/" + selfSlug).then(setPmDetail), [selfSlug]);
 
@@ -148,10 +149,14 @@ export default function App() {
   useEffect(
     () =>
       onStream(() => {
-        loadList();
-        loadSessions();
-        if (sel) loadDetail(sel);
-        if (pmOpen) loadPm();
+        // coalesce bursts (a write fires several fs.watch events + harvest ping) into one refetch
+        clearTimeout(pingTimer.current);
+        pingTimer.current = setTimeout(() => {
+          loadList();
+          loadSessions();
+          if (sel) loadDetail(sel);
+          if (pmOpen) loadPm();
+        }, 300);
       }),
     [sel, pmOpen, loadList, loadSessions, loadDetail, loadPm],
   );
@@ -242,7 +247,7 @@ export default function App() {
       )}
       {selfSlug && (
         <button className={"pm-pane-toggle" + (pmOpen ? " on" : "")} aria-pressed={pmOpen} onClick={() => setPmOpen(!pmOpen)} title={`${selfSlug}: its todos and state, open next to whatever you are doing`}>
-          {selfSlug}
+          {pmOpen ? "Back ›" : selfSlug}
         </button>
       )}
       {selfSlug && pmOpen && (

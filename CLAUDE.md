@@ -36,7 +36,8 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
   against what it will write and appends every dropped title to
   `$PM_ROOT/.claude/backlog-archive/<slug>.md`, and snapshots the previous file to
   `backlog-archive/.snapshots/` (keep 20/slug). Don't write backlog files any other way.
-  Unknown `##` sections are preserved, not dropped. `backlog-cli.mjs` stays add/move/list:
+  Unknown `##` sections are preserved, not dropped. `backlog-cli.mjs` stays add/move/list/create:
+  `create <slug> …` writes a NEW project's state+backlog (create-only, refuses an existing slug);
   no delete/rename; `add` rejects duplicate exact titles; `move` is exact-title only.
 - **Task ids are positional**, shift after any write. Match by title when it must be stable.
 - **No LLM calls from pm.** It only seeds terminal Claude Code sessions (`server/launch.mjs`).
@@ -53,14 +54,20 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
 - **Changes tool** (`server/changes.mjs`) runs plain git (argv, stdin message) on repos under `PM_ROOT`, no Claude. Files/hunks must
   match live `git status`/`diff`; Discard saves a patch to `.claude/pm/discarded/` first. Don't add branch ops or force-push.
 - **Launch routes are guarded**: loopback client or valid `PM_TOKEN`. Everything else is
-  unauthenticated by design (meant for a trusted LAN or loopback).
+  unauthenticated by design (meant for a trusted LAN or loopback). `POST /api/projects/:slug/start`
+  is one of them: it runs only the fixed `./start.sh` in the project dir, and only when `start.sh`
+  is a regular file whose realpath stays inside that dir (`startScript` in `projects.mjs`).
+  `projects` payload carries `hasStart` for the Home ▶ start button.
+- **Run selected** (`POST …/tasks/run-seq`) takes optional `titles`: exact titles among Todo/Doing.
+  Unknown → 409 `{unknown}`; malformed or over 200 → 400; empty/absent = all. `runnableTasks(tasks, titles)`
+  is the single selector.
 - **Never write to a real `.claude/` in tests.** Tests and `verify` set `PM_ROOT` to a temp
   dir before importing anything from `server/paths.mjs`.
 - **Unattended relay** (`server/relay.mjs`): headless `claude -p`. Edit/Write under
   `.claude/**` is hard-blocked there, so agents change backlog/state only via
   `server/backlog-cli.mjs` (the single allowlisted command). `Bash(git *)` stays denied;
   don't switch to `bypassPermissions`. Todos are matched **by title** — never rename one.
-  Relay args also carry `--strict-mcp-config --append-system-prompt QUIET_NOTE`, plus
+  Relay args also carry `--strict-mcp-config --append-system-prompt QUIET_NOTE` (+ `TOOL_NOTE`), plus
   `--disable-slash-commands` unless the prompt mentions "skill"; relay and `launchClaude` add `--settings $PM_ROOT/.claude/settings.json` when it
   exists (a project-dir cwd doesn't load it otherwise).
 - **Portability**: no `/Users/<name>` (or other machine-specific) paths in shipped source
@@ -71,7 +78,8 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
 - **Security audit** (`POST /api/projects/:slug/security-audit`, `seedForSecurityAudit`)
   is a seed prompt like the others — launch-guarded, pm runs no scanner itself.
   `SECURITY_NOTE` and `PORT_NOTE` (read the workspace port registry, no literal path) are appended
-  to non-ideas build prompts.
+  to non-ideas build prompts. `TOOL_NOTE` (tool names are case-sensitive: `Bash`, not `bash`) is
+  appended to the task, sequential and cross-project seeds and to the relay's `QUIET_NOTE`.
 
 ## Conventions
 

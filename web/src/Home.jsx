@@ -3,7 +3,7 @@ import { ago, get, send } from "./api";
 import Help from "./Help.jsx";
 import LatestTodos from "./LatestTodos.jsx";
 import { RelayStrip } from "./relay.jsx";
-import { loadColor, slugStyle } from "./projectColor.jsx";
+import { loadColor, slugStyle, termBg } from "./projectColor.jsx";
 import { alertDialog, promptDialog } from "./dialog.jsx";
 
 const usd = (n) => (n == null ? "—" : "$" + n.toFixed(2));
@@ -56,7 +56,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   const [ideaMsg, setIdeaMsg] = useState({});
   const ideaTimer = useRef(null);
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState(() => loadPref(SORT_KEY, (v) => v in SORTS, "focus"));
+  const [sort, setSort] = useState(() => loadPref(SORT_KEY, (v) => v in SORTS, "recent"));
   const [tab, setTab] = useState(() => loadPref(TAB_KEY, (v) => TABS.some(([k]) => k === v), "project"));
   const [toolsOpen, setToolsOpen] = useState(() => loadPref(TOOLS_OPEN_KEY, (v) => v === "1", "0") === "1");
   const [hidden, setHidden] = useState(loadHidden);
@@ -95,15 +95,17 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
     e.preventDefault();
     const title = idea.trim();
     if (!title || ideaMsg.busy) return;
-    setIdeaMsg({ busy: true });
+    // optimistic: show "saved" and clear the box now; restore the text if the POST fails
+    setIdea("");
+    setIdeaMsg({ ok: `Saved to Ideas: “${title.length > 60 ? title.slice(0, 57) + "…" : title}”` });
+    clearTimeout(ideaTimer.current);
+    ideaTimer.current = setTimeout(() => setIdeaMsg({}), 3500);
     try {
       await send("POST", "/projects/ideas/tasks", { title });
-      setIdea("");
       reload();
-      setIdeaMsg({ ok: `Saved to Ideas: “${title.length > 60 ? title.slice(0, 57) + "…" : title}”` });
-      clearTimeout(ideaTimer.current);
-      ideaTimer.current = setTimeout(() => setIdeaMsg({}), 3500);
     } catch (err) {
+      clearTimeout(ideaTimer.current);
+      setIdea((cur) => cur || title);
       setIdeaMsg({ err: err.message });
     }
   }
@@ -124,14 +126,15 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   // Tools tab = in-app tools (Env Manager). The self project (PM_SELF_SLUG) lives in the side pane.
   const sorted = (projects || [])
     .filter((p) => p.slug !== selfSlug)
-    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || SORTS[sort][1](a, b));
+    .sort((a, b) => SORTS[sort][1](a, b));
+  const ideasProj = tab === "project" ? sorted.find((p) => p.pinned) : null;
   const q = query.trim().toLowerCase();
   // pinned projects (e.g. ideas) always show, regardless of filter and search
   const match = (p) =>
     p.pinned ||
     (!hidden.includes(p.slug) &&
       (!q || [p.slug, p.title, p.status, p.next, p.lastResult].some((t) => (t || "").toLowerCase().includes(q))));
-  const visible = tab === "project" ? sorted.filter((p) => (p.kind || "project") === "project" && match(p)) : [];
+  const visible = tab === "project" ? sorted.filter((p) => !p.pinned && (p.kind || "project") === "project" && match(p)) : [];
   const entries = tab === "project" ? sorted.filter((p) => (p.kind || "project") !== "project" && match(p)) : [];
 
   const renderCard = (p) => {
@@ -153,7 +156,41 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
               <Help text="Your always-on-top ideas inbox — a catch-all backlog for anything not tied to a specific project yet. Never hidden by the filter." />
             )}
           </span>
-          {p.blocked && <span className="dot" title="blocked" />}
+          {p.hasStart && (
+            <span className="start-wrap">
+            <button
+              className={"start-btn" + (p.running?.length ? " is-running" : "")}
+              title={p.running?.length ? "Running — click to stop it" : "Run ./start.sh in a terminal"}
+              aria-label={`${p.running?.length ? "Stop" : "Start"} ${p.title}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                const req = p.running?.length
+                  ? send("POST", `/projects/${p.slug}/stop`).then(() => (reload(), setTimeout(reload, 1500)))
+                  : send("POST", `/projects/${p.slug}/start`, { bg: termBg(p.slug, loadColor(p.slug)) });
+                req.catch((err) => alertDialog(err.message));
+              }}
+            >
+              <span className="start-ico">{p.running?.length ? "■" : "▶"}</span>
+              <span className="start-txt">
+                <b>{p.running?.length ? "Stop" : "Start"}</b>
+                <small>{p.running?.length ? p.running.slice(0, 3).map((r) => ":" + r.port).join(" ") : "./start.sh"}</small>
+              </span>
+            </button>
+              {p.running?.length > 0 && (
+                <a
+                  className="open-btn"
+                  href={`http://127.0.0.1:${p.running[0].port}`}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title={`Open http://127.0.0.1:${p.running[0].port} in a new tab`}
+                  aria-label={`Open ${p.title} app`}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  ↗
+                </a>
+              )}
+            </span>
+          )}
         </div>
         {p.description && <div className="desc clamp">{p.description}</div>}
         <div className="status clamp">{p.status || <em className="muted">no status</em>}</div>
@@ -269,6 +306,13 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
       )}
 
       <RelayStrip />
+
+      {ideasProj && (
+        <button className="ideas-pill" onClick={() => onOpen(ideasProj.slug)} title="Your ideas inbox, always on top and never hidden by the filter">
+          <span>💡 {ideasProj.title}</span>
+          <span className="muted">{ideasProj.openCount} open</span>
+        </button>
+      )}
 
       {projects === null ? (
         <p className="muted pad">Loading…</p>

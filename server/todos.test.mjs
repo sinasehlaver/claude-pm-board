@@ -165,3 +165,19 @@ test("POST /api/tasks/run-cross: stale => 409, ideas-only/empty/bad => 400", asy
   assert.equal((await post("/api/tasks/run-cross", { items: [{ slug: "../x", id: 0 }] })).status, 400);
   assert.equal((await post("/api/tasks/run-cross", {})).status, 400);
 });
+
+test("POST run-seq: titles validated (409 unknown, 400 malformed), selected vs all", async () => {
+  const ok = await post("/api/projects/pm/tasks/run-seq", { titles: ["pm second"] });
+  assert.equal(ok.status, 200);
+  const d = await ok.json();
+  assert.equal(d.mode, "selected");
+  assert.equal(d.count, 1);
+  const unk = await post("/api/projects/pm/tasks/run-seq", { titles: ["pm second", "ghost"] });
+  assert.equal(unk.status, 409);
+  assert.deepEqual((await unk.json()).unknown, ["ghost"]);
+  assert.equal((await post("/api/projects/pm/tasks/run-seq", { titles: "pm first" })).status, 400);
+  assert.equal((await post("/api/projects/pm/tasks/run-seq", { titles: [5] })).status, 400);
+  const all = await (await post("/api/projects/pm/tasks/run-seq", { titles: [] })).json();
+  assert.equal(all.mode, "all");
+  assert.equal(all.count, 2);
+});

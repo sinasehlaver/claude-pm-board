@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 process.env.USER = "sina";
-const { parseLsof, parseCwds, projectOf, listPorts, killPort } = await import("./ports.mjs");
+const { parseLsof, parseCwds, projectOf, listPorts, killPort, stopProject } = await import("./ports.mjs");
 
 const SAMPLE = ["p100", "cnode", "Lsina", "n127.0.0.1:4500", "n[::1]:4500", "p200", "cControlCe", "Lroot", "n*:7000", `p${process.pid}`, "cnode", "Lsina", "n*:9999", ""].join("\n");
 const lister = async () => SAMPLE;
@@ -44,4 +44,16 @@ test("cwd -> project slug from the first folder under the root", async () => {
   const r = await listPorts({ lister, root: "/ws", cwdLister: async () => "p100\nn/ws/pm/server\n" });
   assert.equal(r.find((x) => x.pid === 100).project, "pm");
   assert.equal(r.find((x) => x.pid === 200).project, null);
+});
+
+test("stopProject signals only own, non-self listeners inside that project", async () => {
+  const cwdLister = async () => `p100\nn/ws/app\np200\nn/ws/app\np${process.pid}\nn/ws/app\n`;
+  const calls = [];
+  const kill = (pid, sig) => calls.push([pid, sig]);
+  const out = await stopProject("app", { lister, cwdLister, root: "/ws", kill });
+  assert.deepEqual(out.pids, [100]);
+  assert.deepEqual(calls, [[100, "SIGTERM"]]);
+  const err = await stopProject("other", { lister, cwdLister, root: "/ws", kill }).catch((e) => e.status);
+  assert.equal(err, 404);
+  assert.equal(calls.length, 1);
 });

@@ -81,14 +81,23 @@ export function serializeBacklog(b, { refreshDate = false } = {}) {
   return out.join("\n");
 }
 
-// Which tasks "Run" launches. Any non-Done @seq-flagged task => only those
-// (mode "seq", an explicit selection — Blocked included if the user flagged it).
-// Otherwise every Todo + Doing task (mode "all"; Blocked and Done are skipped).
-// The web client mirrors this in Project.jsx to label the button — keep in sync.
-export function runnableTasks(tasks) {
-  const seq = tasks.filter((t) => t.seq && t.state !== "Done");
-  if (seq.length) return { mode: "seq", tasks: seq };
-  return { mode: "all", tasks: tasks.filter((t) => t.state === "Todo" || t.state === "Doing") };
+export const MAX_RUN_TITLES = 200;
+
+// Which tasks "Run" launches. `titles` (the UI's ticked rows) => exactly those
+// open (Todo/Doing) tasks, matched by exact title (mode "selected"); any title that
+// isn't a live open task lands in `unknown` (route answers 409). No titles => every
+// Todo + Doing task (mode "all"; Blocked and Done skipped). The legacy @seq flag is
+// no longer consulted. Throws on a malformed `titles`.
+export function runnableTasks(tasks, titles) {
+  const open = tasks.filter((t) => t.state === "Todo" || t.state === "Doing");
+  if (titles === undefined || titles === null) return { mode: "all", tasks: open, unknown: [] };
+  if (!Array.isArray(titles) || titles.length > MAX_RUN_TITLES || titles.some((x) => typeof x !== "string"))
+    throw Object.assign(new Error("titles must be an array of strings (max " + MAX_RUN_TITLES + ")"), { status: 400 });
+  if (!titles.length) return { mode: "all", tasks: open, unknown: [] };
+  const want = new Set(titles);
+  const picked = open.filter((t) => want.has(t.title));
+  const have = new Set(picked.map((t) => t.title));
+  return { mode: "selected", tasks: picked, unknown: [...want].filter((x) => !have.has(x)) };
 }
 
 export function emptyBacklog(slug) {

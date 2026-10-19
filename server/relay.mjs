@@ -281,7 +281,8 @@ const say = (msg) => console.log(`[relay ${new Date().toLocaleTimeString([], { h
 
 export const QUIET_NOTE =
   "Unattended run: nobody reads your text between tool calls, so write none. " +
-  "Final message <=8 lines: what shipped, what's left, what wasn't verified.";
+  "Final message <=8 lines: what shipped, what's left, what wasn't verified. " +
+  "Tool names are case-sensitive: call `Bash`, `Read`, `Edit`, never `bash`.";
 
 // One child run. Resolves { st, softStopped } once claude has exited.
 function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {

@@ -76,7 +76,7 @@ test("seedForSequentialRun lists every todo, the burn-rate sources, and rules po
       { title: "todo two", note: null },
     ],
   });
-  assert.match(s, /2 @seq-flagged todo/);
+  assert.match(s, /2 selected todo/);
   assert.match(s, /1\. todo one/);
   assert.match(s, /a note/);
   assert.match(s, /2\. todo two/);
@@ -89,15 +89,14 @@ test("seedForSequentialRun lists every todo, the burn-rate sources, and rules po
   assert.match(adhoc, /\.claude\/backlog\/someidea\.md/);
 });
 
-test("seedForSequentialRun words the batch by mode: @seq-flagged only in seq mode", () => {
+test("seedForSequentialRun words the batch by mode: 'selected' only in selected mode", () => {
   const tasks = [{ title: "a" }, { title: "b" }, { title: "c" }];
   const seq = seedForSequentialRun({ slug: "hub", tasks });
-  assert.match(seq, /batch of 3 @seq-flagged todo\(s\)/);
-  assert.match(seq, /drop its @seq marker/);
+  assert.match(seq, /batch of 3 selected todo\(s\)/);
+  assert.doesNotMatch(seq, /@seq/);
   const all = seedForSequentialRun({ slug: "hub", tasks, mode: "all" });
   assert.match(all, /batch of 3 todo\(s\)/);
-  assert.doesNotMatch(all, /@seq-flagged/);
-  assert.doesNotMatch(all, /drop its @seq marker/);
+  assert.doesNotMatch(all, /selected todo|@seq/);
   assert.match(all, /SINGLE-SESSION PACING/);
   assert.doesNotMatch(all, /localhost:4310|vscode-claude-status-cache|PRE-LAUNCH/);
 });
@@ -129,7 +128,7 @@ test("seedForSequentialRun on ideas promotes each into a real pm project", () =>
       { title: "idea two", note: null },
     ],
   });
-  assert.match(s, /2 @seq-flagged idea/);
+  assert.match(s, /2 selected idea/);
   assert.match(s, /1\. idea one/);
   assert.match(s, /note one/);
   assert.match(s, /2\. idea two/);
@@ -160,7 +159,7 @@ test("seedForSequentialRun on ideas runs prospector first and stops on an adopt 
   assert.match(s, /"Adopt" \(a suitable off-the-shelf tool exists\) -> STOP/);
   assert.match(s, /Do NOT scaffold a project/);
   assert.match(s, /adopt <tool>, not built - see knowledge\/prospector\/<slug>\.md/);
-  assert.match(s, /un-flag it/);
+  assert.match(s, /the bullet in ideas\.md \(with the note\)/);
   assert.match(s, /'adopt, not built'/);
 });
 
@@ -241,7 +240,7 @@ test("launchClaude tints the window with a valid bg and ignores a bad one", asyn
   assert.match(ok.osa, /background color (of t )?to \{2827, 5911, 12336\}/);
   for (const bad of ["#zzzzzz", '#000000"} & (do shell script "x") & {"', "red", undefined]) {
     const r = await launchClaude({ cwd: "/tmp", resumeId: "x1", bg: bad });
-    assert.doesNotMatch(r.osa, /background color/);
+    assert.match(r.osa, /background color (of t )?to \{0, 0, 0\}/);
   }
 });
 
@@ -270,4 +269,17 @@ test("both ideas prompts check research-only first and forbid promotion for it",
     assert.match(s, /Create NO project/);
     assert.ok(s.indexOf("RESEARCH-ONLY CHECK") < s.indexOf("venturemind"));
   }
+});
+
+test("build seeds and relay note carry the case-sensitive tool-name note", async () => {
+  const { TOOL_NOTE } = await import("./launch.mjs");
+  const { QUIET_NOTE } = await import("./relay.mjs");
+  assert.match(TOOL_NOTE, /never `bash`/);
+  const tasks = [{ slug: "hub", title: "t", note: null }];
+  for (const s of [
+    seedForTask({ slug: "hub", title: "t", note: null }),
+    seedForSequentialRun({ slug: "hub", tasks }),
+    seedForCrossProjectRun({ tasks }),
+  ]) assert.ok(s.includes(TOOL_NOTE));
+  assert.match(QUIET_NOTE, /never `bash`/);
 });

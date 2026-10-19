@@ -1,5 +1,5 @@
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, stat, realpath } from "node:fs/promises";
+import { join, sep } from "node:path";
 import { PM_ROOT, RULES_DIR, STATE_DIR, HANDOFFS_DIR } from "./paths.mjs";
 import { kindOf, entryDir, readEntries } from "./entries.mjs";
 import { readState } from "./state.mjs";
@@ -29,6 +29,19 @@ export async function discoverSlugs() {
   // A project = a state or backlog file. rules/*.md alone does not make one: in a shared
   // workspace those are path-scoped guidance docs (evaluation.md, notebooks.md, …).
   return { all: [...new Set([...state, ...backlog])].sort(), rules };
+}
+
+// PM_ROOT/<slug>/start.sh exists as a regular file whose real path stays inside the project dir.
+export async function startScript(slug) {
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(slug || "")) return null;
+  try {
+    const dir = await realpath(entryDir(slug));
+    const f = await realpath(join(dir, "start.sh"));
+    if (!f.startsWith(dir + sep)) return null;
+    return (await stat(f)).isFile() ? f : null;
+  } catch {
+    return null;
+  }
 }
 
 async function hasDir(slug) {
@@ -146,6 +159,7 @@ export async function listProjects(kind = "project") {
         openCount: open,
         blocked: Boolean(blocked),
         lastActivity: lastTouched(activity, slug),
+        hasStart: Boolean(await startScript(slug)),
       };
     }),
   );

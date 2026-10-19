@@ -72,3 +72,13 @@ test("state resume sets one Resume field and rejects unknown fields", async () =
   await assert.rejects(C.setResume("p", "nope", "x"), /resume field must be one of/);
   await assert.rejects(C.setResume("../x", "branch", "x"), /bad slug/);
 });
+
+test("create: writes a new project's state+backlog once, refuses an existing slug", async () => {
+  await C.createProject("newp", "does a thing", "knowledge/atelier/x.md", ["a", "b"], ["Build block A", "Build block B"]);
+  const t = readFileSync(join(root, ".claude/backlog/newp.md"), "utf8");
+  assert.match(t, /## Todo\n- Build block A\n {2}Plan: knowledge\/atelier\/x\.md/);
+  assert.match(readFileSync(join(root, ".claude/state/newp.md"), "utf8"), /Full plan: knowledge\/atelier\/x\.md[\s\S]*## Next\n- a\n- b/);
+  await assert.rejects(C.createProject("newp", "s", "p", [], ["t"]), /already exists/);
+  seed();
+  await assert.rejects(C.createProject("p", "s", "p", [], ["t"]), /already exists/);
+});

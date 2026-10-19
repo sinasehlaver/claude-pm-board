@@ -24,10 +24,11 @@ const CLEAN_ENV = "unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE CLAUDE_CODE_ENTRYP
 function termOsa(rawInner, bg) {
   const inner = CLEAN_ENV + rawInner;
   const iterm = existsSync("/Applications/iTerm.app");
-  const rgb = /^#[0-9a-f]{6}$/i.test(bg || "") ? [1, 3, 5].map((i) => parseInt(bg.slice(i, i + 2), 16) * 257).join(", ") : "";
+  const tint = /^#[0-9a-f]{6}$/i.test(bg || "") ? bg : "#000000";
+  const rgb = [1, 3, 5].map((i) => parseInt(tint.slice(i, i + 2), 16) * 257).join(", ");
   const osa = iterm
-    ? `tell application "iTerm"\n  activate\n  create window with default profile\n  tell current session of current window\n${rgb ? `    set background color to {${rgb}}\n` : ""}    write text ${osaStr(inner)}\n  end tell\nend tell`
-    : `tell application "Terminal"\n  activate\n  set t to do script ${osaStr(inner)}\n${rgb ? `  set background color of t to {${rgb}}\n` : ""}end tell`;
+    ? `tell application "iTerm"\n  activate\n  create window with default profile\n  tell current session of current window\n    set background color to {${rgb}}\n    write text ${osaStr(inner)}\n  end tell\nend tell`
+    : `tell application "Terminal"\n  activate\n  set t to do script ${osaStr(inner)}\n  set background color of t to {${rgb}}\nend tell`;
   return { osa, term: iterm ? "iterm" : "terminal" };
 }
 
@@ -64,7 +65,7 @@ export function seedForTask({ slug, title, note, adhoc }) {
       "",
       RESUME_NOTE,
     );
-  out.push("", SECURITY_NOTE, PORT_NOTE, WEBAPP_NOTE);
+  out.push("", SECURITY_NOTE, PORT_NOTE, WEBAPP_NOTE, TOOL_NOTE);
   return out.join("\n");
 }
 
@@ -191,6 +192,10 @@ function seedForIdeaResearch({ title, note }) {
 
 // One-line secure-by-default reminder appended to build prompts (not ideas research).
 // The full method is the workspace `security-guard` skill, launched by seedForSecurityAudit.
+export const TOOL_NOTE =
+  "TOOL NAMES are case-sensitive: call `Bash`, `Read`, `Edit`, `Write`, `Grep`, `Glob`, `Agent` (alias `Task`) " +
+  "exactly like that — never `bash`, `read`, `grep`.";
+
 const SECURITY_NOTE =
   "SECURE BY DEFAULT — no secrets in code/logs, authz on every route, no string-built shell/SQL/paths " +
   "(containment-check user paths), validate/limit input, no 0.0.0.0 bind without auth. " +
@@ -355,12 +360,12 @@ const PACING_RELAY = [
   "reschedule yourself (no ScheduleWakeup) — just keep working, <=3 concurrent subagents.",
 ].join("\n");
 
-// Seed prompt for the "Run @seq" orchestrator launch: one claude session that
+// Seed prompt for the "Run all / Run selected" orchestrator launch: one claude session that
 // works a batch of backlog todos, fanning them out to subagents.
-// `mode` mirrors runnableTasks(): "seq" = the batch is the @seq-flagged todos,
-// "all" = run-all fallback (nothing flagged), so the prompt must not say "@seq-flagged".
+// `mode` mirrors runnableTasks(): "selected" = the batch is the user's ticked todos,
+// "all" = every open todo, so the prompt only says "selected" in selected mode.
 // `relay` = unattended headless run (PACING_RELAY instead of RUN_NOTE).
-export function seedForSequentialRun({ slug, tasks, adhoc, mode = "seq", relay = false }) {
+export function seedForSequentialRun({ slug, tasks, adhoc, mode = "selected", relay = false }) {
   if (slug === "ideas") return seedForIdeaPromotion({ tasks, relay });
   const seqMode = mode !== "all";
   const list = tasks
@@ -370,7 +375,7 @@ export function seedForSequentialRun({ slug, tasks, adhoc, mode = "seq", relay =
     })
     .join("\n");
   const out = [
-    `You're the orchestrator for a batch of ${tasks.length} ${seqMode ? "@seq-flagged " : ""}todo(s) from the pm board backlog for "${slug}".`,
+    `You're the orchestrator for a batch of ${tasks.length} ${seqMode ? "selected " : ""}todo(s) from the pm board backlog for "${slug}".`,
     "",
     "TODOS:",
     list,
@@ -400,14 +405,15 @@ export function seedForSequentialRun({ slug, tasks, adhoc, mode = "seq", relay =
     "ORCHESTRATION:",
     ...dispatch,
     "- After a todo lands and its project's verify/tests pass, move it to Done in",
-    `  .claude/backlog/${slug}.md${seqMode ? " and drop its @seq marker" : ""}. Leave a todo in place`,
-    `  (${seqMode ? "un-flagged, " : ""}with a note) if it turns out blocked.`,
+    `  .claude/backlog/${slug}.md. Leave a todo in place`,
+    "  (with a note) if it turns out blocked.",
     "",
     relay ? PACING_RELAY : RUN_NOTE_ASK,
     "",
     SECURITY_NOTE,
     PORT_NOTE,
     WEBAPP_NOTE,
+    TOOL_NOTE,
     "",
     adhoc
       ? `When all todos are done or blocked, update .claude/backlog/${slug}.md and summarise what shipped, what was deferred, and why.`
@@ -463,13 +469,14 @@ export function seedForCrossProjectRun({ tasks, relay = false }) {
     SECURITY_NOTE,
     PORT_NOTE,
     WEBAPP_NOTE,
+    TOOL_NOTE,
     "",
     "When all todos are done or blocked, summarise per project what shipped, what was deferred, and why.",
   ];
   return out.join("\n");
 }
 
-// Seed prompt for "Run @seq" on the Ideas inbox: promote every @seq-flagged
+// Seed prompt for "Run" on the Ideas inbox: promote every selected
 // idea into a real pm project (research + scaffold), instead of orchestrating
 // todos within one existing project.
 function seedForIdeaPromotion({ tasks, relay = false }) {
@@ -480,7 +487,7 @@ function seedForIdeaPromotion({ tasks, relay = false }) {
     })
     .join("\n");
   const out = [
-    `You're the orchestrator promoting a batch of ${tasks.length} @seq-flagged idea(s)`,
+    `You're the orchestrator promoting a batch of ${tasks.length} selected idea(s)`,
     "from the pm board's Ideas inbox into real pm projects.",
     "",
     "IDEAS:",
@@ -511,7 +518,7 @@ function seedForIdeaPromotion({ tasks, relay = false }) {
     "        under the idea's bullet in .claude/backlog/ideas.md (match by title)",
     "        with the verdict, the tool name, and prospector's report path, e.g.",
     "        \"adopt <tool>, not built - see knowledge/prospector/<slug>.md\". Leave",
-    "        the bullet in ideas.md and un-flag it (drop its @seq marker) so it",
+    "        the bullet in ideas.md (with the note) so it",
     "        isn't re-run. Skip steps 3 and 4 below for this idea and report it in",
     "        your final summary as 'adopt, not built'.",
     "      - \"Build\" or \"Adopt + extend\" (nothing suitable exists, or a gap is left",

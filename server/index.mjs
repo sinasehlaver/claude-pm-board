@@ -3,19 +3,19 @@ import { existsSync, watch, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PM_ROOT, CLAUDE, STATE_DIR, BACKLOG_DIR } from "./paths.mjs";
-import { listProjects, getProject, discoverSlugs } from "./projects.mjs";
+import { listProjects, getProject, discoverSlugs, startScript } from "./projects.mjs";
 import { KINDS, entryDir } from "./entries.mjs";
 import { readState, writeState } from "./state.mjs";
 import { readBacklog, writeBacklog, emptyBacklog, runnableTasks, readArchive, restoreTask } from "./backlog.mjs";
 import { listSessions, fileSession, sessionToTask, sessionToNewProject, moveTask } from "./sessions.mjs";
-import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForDoctorFinding, seedForDoctorFindings, launchClaude, launchRelay } from "./launch.mjs";
+import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForDoctorFinding, seedForDoctorFindings, launchClaude, launchRelay, launchCommand } from "./launch.mjs";
 import { listRelayJobs, relayDir, dismissRelay } from "./relay.mjs";
 import { latestTodos, resolveCrossItems } from "./todos.mjs";
 import { taskTokens } from "./tokens.mjs";
 import { openFile } from "./open.mjs";
 import { harvest as runHarvest } from "./harvest.mjs";
 import { scanEnvs, updateEnv } from "./envs.mjs";
-import { listPorts, killPort } from "./ports.mjs";
+import { listPorts, killPort, stopProject } from "./ports.mjs";
 import * as changes from "./changes.mjs";
 import { resolveHost, tokenMatches } from "./bind.mjs";
 import { readDoctor, scanAndCache, startDoctorTimer, withStatuses, setStatus, verifyFinding, FINDING_STATUSES, NOTE_MAX } from "./doctor.mjs";
@@ -53,12 +53,30 @@ app.get("/api/health", async (_req, res, next) => {
   }
 });
 
+// listening ports per project (cwd under PM_ROOT), cached so the 30s refetches don't spawn lsof each time
+let runCache = { at: 0, map: new Map() };
+async function runningBySlug() {
+  if (Date.now() - runCache.at < 4000) return runCache.map;
+  const map = new Map();
+  try {
+    for (const r of await listPorts()) {
+      if (!r.project || r.self) continue;
+      const a = map.get(r.project) || [];
+      if (!a.some((x) => x.port === r.port)) a.push({ port: r.port, command: r.command });
+      map.set(r.project, a);
+    }
+  } catch {}
+  runCache = { at: Date.now(), map };
+  return map;
+}
+
 // ?kind=project (default) | tool | all  (see server/entries.mjs)
 app.get("/api/projects", async (req, res, next) => {
   try {
     const kind = req.query.kind || "project";
     if (kind !== "all" && !KINDS.includes(kind)) return res.status(400).json({ error: "bad kind" });
-    res.json(await listProjects(kind));
+    const [list, running] = await Promise.all([listProjects(kind), runningBySlug()]);
+    res.json(list.map((p) => ({ ...p, running: running.get(p.slug) || [] })));
   } catch (e) {
     next(e);
   }
@@ -265,6 +283,20 @@ app.post("/api/projects/:slug/tasks/:id/launch", async (req, res, next) => {
   }
 });
 
+// Start: terminal running the project's own ./start.sh. Fixed command, no client text.
+app.post("/api/projects/:slug/start", async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug)) return res.status(400).json({ error: "bad slug" });
+    if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
+    if (!(await readState(slug)) && !(await readBacklog(slug))) return res.status(404).json({ error: "no such project" });
+    if (!(await startScript(slug))) return res.status(404).json({ error: "no start.sh" });
+    res.json({ ok: true, ...(await launchCommand({ cwd: entryDir(slug), inner: "./start.sh", bg: req.body?.bg })) });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // Continue: interactive session that re-orients from the project's state + Resume block.
 app.post("/api/projects/:slug/continue", async (req, res, next) => {
   try {
@@ -294,8 +326,8 @@ app.post("/api/projects/:slug/security-audit", async (req, res, next) => {
   }
 });
 
-// Launch one orchestrator session over the project's @seq-flagged todos, or —
-// when none are flagged — over every Todo/Doing task (see runnableTasks).
+// Launch one orchestrator session over the ticked todos (body `titles`, exact-title,
+// unknown => 409), or over every Todo/Doing task when none (see runnableTasks).
 // Same guard + launchClaude path as the single-task build button; pm doesn't
 // supervise the session.
 app.post("/api/projects/:slug/tasks/run-seq", async (req, res, next) => {
@@ -304,7 +336,15 @@ app.post("/api/projects/:slug/tasks/run-seq", async (req, res, next) => {
     if (!SLUG_RE.test(slug)) return res.status(400).json({ error: "bad slug" });
     if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
     const bl = await readBacklog(slug);
-    const { mode, tasks } = runnableTasks(bl ? bl.tasks : []);
+    let pick;
+    try {
+      pick = runnableTasks(bl ? bl.tasks : [], req.body?.titles);
+    } catch (e) {
+      if (e.status === 400) return res.status(400).json({ error: e.message });
+      throw e;
+    }
+    const { mode, tasks, unknown } = pick;
+    if (unknown.length) return res.status(409).json({ error: "selected todos changed, refresh", unknown });
     if (!tasks.length) return res.status(400).json({ error: "no runnable todos" });
     const dir = entryDir(slug);
     const relay = unattended(req);
@@ -486,6 +526,20 @@ app.get("/api/ports", async (req, res, next) => {
     next(e);
   }
 });
+app.post("/api/projects/:slug/stop", async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug)) return res.status(400).json({ error: "bad slug" });
+    if (!canLaunch(req)) return res.status(403).json({ error: "stop needs loopback or PM_TOKEN" });
+    const out = await stopProject(slug);
+    runCache.at = 0;
+    res.json({ ok: true, ...out });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    next(e);
+  }
+});
+
 app.post("/api/ports/kill", async (req, res, next) => {
   try {
     if (!canLaunch(req)) return res.status(403).json({ error: "ports need loopback or PM_TOKEN" });
@@ -551,8 +605,14 @@ app.get("/api/stream", (req, res) => {
   clients.add(res);
   req.on("close", () => clients.delete(res));
 });
+// fs.watch fires several events per write; collapse them into one ping
+let pingT = null;
 function ping() {
-  for (const res of clients) res.write(`data: ${Date.now()}\n\n`);
+  if (pingT) return;
+  pingT = setTimeout(() => {
+    pingT = null;
+    for (const res of clients) res.write(`data: ${Date.now()}\n\n`);
+  }, 80);
 }
 try {
   mkdirSync(relayDir(PM_ROOT), { recursive: true });
@@ -568,6 +628,8 @@ function harvest() {
   runHarvest().then(ping, (err) => console.error("[harvest]", err.message));
 }
 harvest();
+// warm the per-file usage cache off the request path so the first /api/usage isn't a ~800ms cold scan
+setTimeout(() => { try { statuslineUsageCached(); } catch {} }, 0).unref();
 setInterval(harvest, 10 * 60 * 1000).unref();
 
 // --- static SPA (built) ------------------------------------------------

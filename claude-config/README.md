@@ -45,6 +45,29 @@ commands in that file (not verified beyond that one observation).
 }
 ```
 
+## Tamper-proof guard (managed settings, macOS)
+
+`hooks/guard-pm-files.sh` blocks Claude from editing the board's `state/`, `backlog/` and
+`backlog-archive/` files directly (it must go through `server/backlog-cli.mjs`). A hook registered
+in `<workspace>/.claude/settings*.json` is only as safe as those files: a session runs as you, so it
+could edit the script or delete its registration. Claude Code's *managed settings* live in a
+root-owned folder and outrank project and user settings, so a session cannot change them.
+
+```sh
+sudo pm/claude-config/managed/install.sh
+```
+
+It copies the script to `/Library/Application Support/ClaudeCode/hooks/` (root-owned; this copy is what
+runs) and writes `managed-settings.json` there, registering the guard for `Bash|Edit|Write|NotebookEdit`.
+It never overwrites an existing `managed-settings.json`; it prints the entry to merge instead (exit 2).
+The command path is single-quoted (it runs via `/bin/sh` and the dir has a space); re-running fixes an older unquoted registration.
+
+- Start a new Claude session afterwards; check with `ls -l "/Library/Application Support/ClaudeCode"`.
+- `hooks/guard-pm-files.sh` here is only the installer's source: don't also copy it into `<workspace>/.claude/hooks/` or register it in workspace settings (a session could edit that copy).
+- To change the guard, edit this file and re-run the installer with `sudo`.
+- Needs `jq`. Remove the guard with `sudo rm` of those two files. Not run on Windows/Linux (the managed path differs).
+- Limit: it protects the board files from tool calls, not from you or from a process outside Claude Code.
+
 ## Tools I use
 
 Things that cut tokens or improve the Claude Code work environment. Install pointers only; check

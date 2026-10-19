@@ -13,7 +13,7 @@ and let them run unattended.
 ## Features
 
 - **Project board** — one card per project with a one-line description (the first paragraph of the project's `README.md`),
-  status, open-task count, last activity, and a blocked marker. Search, sort (blocked first / recent / stalest / A–Z) and Filter; a
+  status, open-task count, last activity, and a blocked marker. Search, sort (recent by default and remembered / blocked first / stalest / A–Z) and Filter; Ideas is a slim pill above the list, outside the sort; a
   "stale" badge after 7 idle days; a color per project (swatches on the project page, stored in
   your browser); light/dark theme. Two tabs: **Projects** (tool entries from
   `entries.json` sit in a collapsed "tools" group) and **Tools** (Env Manager, Ports, Changes). Sessions and Doctor
@@ -21,12 +21,13 @@ and let them run unattended.
 - **Side pane** — set `PM_SELF_SLUG=<project>` and a floating button opens that project
   (e.g. the board's own todos) in a right-hand pane next to whatever you are doing.
 - **Status** — a short "Now / Next / Last failure / Blockers" note per project (max 50 lines), plus an optional **Resume** block (where to pick it back up).
-- **Backlog** — Doing / Todo / Blocked / Done, with priorities (`p1`–`p3`), notes, and
-  moving tasks between projects.
+- **Backlog** — Doing / Todo / Blocked / Done, with notes, and moving tasks between projects.
+  Each todo has a checkbox to pick it for a batch.
 - **Build with Claude** — ▶ on a task opens a terminal running a seeded Claude Code session.
-- **Run @seq** — flag todos, then run the whole batch as one orchestrated session that
+  ▶ **start** on a project card runs that project's `start.sh` (when it has one).
+- **Run selected / Run all** — tick todos, then run the batch as one orchestrated session that
   fans out to subagents. Runs unattended by default and survives rate limits.
-- **Latest todos** — a cross-project list on Home; run any selection in one go.
+- **Latest todos** — a cross-project list on Home; tick any selection and run it in one go.
 - **Ideas inbox** — capture a one-liner; ▶ researches it and can promote it to a project.
 - **Sessions inbox** — Claude Code conversations harvested from disk; file them to a
   project, turn one into a task, or reopen it.
@@ -52,6 +53,10 @@ settings file it changes is copied to `<file>.bak-<timestamp>` first. What it in
 | `$PM_ROOT/.claude/settings.local.json` | the two hooks, with absolute paths | merged, no duplicates |
 
 Not installed because they contain placeholders to fill in: `claude-config/CLAUDE.md`, `rules/`, `memory/`.
+
+Optional (macOS, needs `sudo`): lock the guard that stops Claude editing board files by installing it as a
+managed hook Claude sessions cannot edit: `sudo claude-config/managed/install.sh`
+([details](claude-config/README.md#tamper-proof-guard-managed-settings-macos)).
 Options: `--no-claude-config` (skip the install), `--no-start` (set up only), `PM_ROOT=<dir>` (pick the workspace).
 
 Manual route:
@@ -87,12 +92,12 @@ PM_ROOT=~/Projects npm run dev
 |---|---|---|
 | Web app, API, `npm test` | ✅ | ✅ (`npm run verify` needs bash — WSL or Git Bash) |
 | Desktop shell (Electron) | ✅ | ❌ not implemented |
-| ▶ / Run @seq / reopen session | ✅ via `osascript` (iTerm or Terminal) | ❌ not implemented |
+| ▶ / Run selected / reopen session | ✅ via `osascript` (iTerm or Terminal) | ❌ not implemented |
 | Unattended relay | ✅ (uses `caffeinate`) | ❌ not implemented |
 
 ### Terminal colors
 
-Board launches (▶, Run @seq, Continue, Doctor fix) open a window with your terminal's **default
+Board launches (▶, Run selected, Continue, Doctor fix) open a window with your terminal's **default
 profile** — iTerm2 if `/Applications/iTerm.app` exists, else Terminal.app — so colors come from that
 profile, not from the board.
 
@@ -101,12 +106,14 @@ profile, not from the board.
 - **Theme**: pick light or dark inside Claude Code with `/theme`, and match the terminal profile
   (iTerm2 → Settings → Profiles → Colors → Color Presets; Terminal.app → Settings → Profiles).
 - **Per-project tint**: the swatch you pick on a project page (or its automatic hue) tints the
-  background of terminal windows launched from that page (▶, Run @seq, Continue, Security audit,
-  reopen session) to a very dark shade of that color, so windows of different projects are easy to
-  tell apart. Pick "default" to keep the hue derived from the slug. The tint is set on the window
-  through AppleScript (`set background color`), so it overrides the profile's background for that
-  window only. The unattended relay runs headless and is not tinted. If your `~/.zshrc` wraps
-  `claude` and repaints the background, remove that wrapper's color line or it will win.
+  background of terminal windows launched from that page (▶, Run selected, Continue, Security audit,
+  reopen session) to a dark shade of that color (about 14% brightness), so windows of different
+  projects are easy to tell apart. Pick "default" to keep the hue derived from the slug. The tint is
+  set on the window through AppleScript (`set background color`), so it overrides the profile's
+  background for that window only. A window launched without a tint is set to black (`#000000`)
+  in both iTerm2 and Terminal.app. The unattended relay runs headless and is not tinted. If your
+  `~/.zshrc` wraps `claude` and repaints the background, remove that wrapper's color line or it will win.
+- **`scripts/setup.sh`** only prints this advice. It never modifies your terminal profiles.
 - **Turning color off or forcing it**: `NO_COLOR=1` disables ANSI color in most CLIs; `FORCE_COLOR=1`
   forces it when output is piped. The board never sets either.
 - **Status line**: `claude-config/statusline/` prints plain text (no escape codes), so it follows your theme.
@@ -145,15 +152,16 @@ back to state and backlog when done. That is what keeps the board live rather th
 
 ```md
 ## Todo
-- Add CSV export to the reports page  @seq  p1
-- Write onboarding doc  p2
+- Add CSV export to the reports page
+- Write onboarding doc
   needs a screenshot of the new flow
 
 ## Done
-- Fix flaky harvester test  p1  (2026-09-03)
+- Fix flaky harvester test  (2026-09-03)
 ```
 
-Trailing order is `<title>  @seq  p<n>  (date)`. An indented line is the task's note.
+Trailing order is `<title>  @seq  p<n>  (date)`. An indented line is the task's note. The board
+no longer shows or sets the `@seq` and `p<n>` suffixes, but older files keep them as written.
 Task ids are positional and shift after any write.
 
 ### Resume block
@@ -220,10 +228,10 @@ They also point new web UIs at a workspace `_webapp-defaults.md` rule and `_star
 (theme, collapsible lists/panels, undo/redo, save/open file, …); both are optional files in
 your workspace, and the note does nothing without them.
 
-### Batches (▶▶ Run @seq)
+### Batches (▶▶ Run selected / Run all)
 
-1. Tap **@seq** on the todos you want in the batch.
-2. Tap **▶▶ Run @seq (N)** next to the Backlog heading. With nothing flagged it reads
+1. Tick the checkbox on the todos you want in the batch.
+2. Tap **▶▶ Run selected (N)** next to the Backlog heading. With nothing ticked it reads
    **▶▶ Run all (N)** and runs every Todo + Doing task instead.
 3. One orchestrator session starts in the project directory. It orders the batch by
    dependency and fans independent todos out to parallel subagents (≤3 at a time).
@@ -301,7 +309,7 @@ and it's not a bill. There is no rate-limit-percentage view; `GET /api/usage` re
 
 ### Tokens per todo
 
-Todos launched from pm (▶, Run @seq / Run all, Home cross-project run, unattended relay)
+Todos launched from pm (▶, Run selected / Run all, Home cross-project run, unattended relay)
 show a small `1.2M tok` badge with the tokens their session spent (subagents included).
 pm tags each seed prompt with a `pm-run: <id>` line and later matches it in the
 transcripts. A batch's total is split evenly across its todos (shown as `~`, an

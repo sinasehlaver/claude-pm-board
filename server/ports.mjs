@@ -102,3 +102,13 @@ export async function killPort(pid, port, { lister, kill = process.kill.bind(pro
   kill(pid, "SIGTERM");
   return { pid, port, command: hit.command };
 }
+
+// Stop every listener whose cwd is inside the project (SIGTERM, own processes only, never the board).
+export async function stopProject(slug, { lister, cwdLister, root, kill = process.kill.bind(process) } = {}) {
+  const hits = (await listPorts({ lister, cwdLister, root })).filter((r) => r.project === slug && r.killable);
+  if (!hits.length) throw new PortError(404, "nothing of this project is listening");
+  const pids = [...new Set(hits.map((r) => r.pid))];
+  if (process.env.PM_LAUNCH_DRYRUN) return { pids, dryRun: true };
+  for (const pid of pids) kill(pid, "SIGTERM");
+  return { pids };
+}

@@ -124,7 +124,7 @@ export default function Changes({ onBack }) {
   const [note, setNote] = useState("");
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useStored("query", "");
   const [hidden, setHidden] = useState(loadHidden); // same hidden list as the Home filter
   const [showFilter, setShowFilter] = useState(false);
   const [plainOpen, setPlainOpen] = useStored("plain", false);

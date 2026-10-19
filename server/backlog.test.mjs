@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseBacklog, serializeBacklog, runnableTasks } from "./backlog.mjs";
+import { parseBacklog, serializeBacklog, runnableTasks, MAX_RUN_TITLES } from "./backlog.mjs";
 
 const CANON = `# hub — backlog
 Updated: 2026-09-08
@@ -47,25 +47,32 @@ test("parse pulls the @seq flag, alone or with a priority", () => {
   assert.equal(neither.seq, false);
 });
 
-test("runnableTasks: flagged non-Done tasks win, else all Todo+Doing", () => {
+test("runnableTasks: titles pick exact open tasks, else all Todo+Doing; @seq ignored", () => {
   const t = (title, state, seq = false) => ({ title, state, seq });
   const tasks = [
     t("doing", "Doing"),
     t("todo", "Todo"),
     t("flagged", "Todo", true),
     t("blocked flagged", "Blocked", true),
-    t("done flagged", "Done", true),
-    t("blocked", "Blocked"),
     t("done", "Done"),
   ];
-  const sel = runnableTasks(tasks);
-  assert.equal(sel.mode, "seq");
-  assert.deepEqual(sel.tasks.map((x) => x.title), ["flagged", "blocked flagged"]);
-
-  // no live flags (a Done task's stale flag doesn't count) -> fallback to all
-  const all = runnableTasks(tasks.filter((x) => !x.seq || x.state === "Done"));
+  const all = runnableTasks(tasks);
   assert.equal(all.mode, "all");
-  assert.deepEqual(all.tasks.map((x) => x.title), ["doing", "todo"]);
+  assert.deepEqual(all.tasks.map((x) => x.title), ["doing", "todo", "flagged"]);
+  assert.equal(runnableTasks(tasks, []).mode, "all");
+
+  const sel = runnableTasks(tasks, ["todo", "doing"]);
+  assert.equal(sel.mode, "selected");
+  assert.deepEqual(sel.tasks.map((x) => x.title), ["doing", "todo"]);
+  assert.deepEqual(sel.unknown, []);
+
+  // Blocked/Done/missing/near-miss titles are unknown, never guessed
+  assert.deepEqual(runnableTasks(tasks, ["todo", "done", "blocked flagged", "Todo", "nope"]).unknown, ["done", "blocked flagged", "Todo", "nope"]);
+
+  // malformed
+  assert.throws(() => runnableTasks(tasks, "todo"), { status: 400 });
+  assert.throws(() => runnableTasks(tasks, [1]), { status: 400 });
+  assert.throws(() => runnableTasks(tasks, Array(MAX_RUN_TITLES + 1).fill("todo")), { status: 400 });
 
   // nothing runnable -> empty (server answers 400)
   assert.deepEqual(runnableTasks([t("b", "Blocked"), t("d", "Done")]).tasks, []);

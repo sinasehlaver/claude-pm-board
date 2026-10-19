@@ -61,31 +61,54 @@ const localDay = (ms) => {
   return Math.floor(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / DAY);
 };
 
+// path -> { mtimeMs, size, rows: [[id, ts, cost]] }; unchanged transcripts are never re-read or re-parsed
+// (a cold scan of ~500 files took ~800ms of blocked event loop, which stalled every request).
+const fileRows = new Map();
+
+function rowsOf(p) {
+  let st;
+  try {
+    st = fs.statSync(p);
+  } catch {
+    return [];
+  }
+  const hit = fileRows.get(p);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.rows;
+  let text;
+  try {
+    text = fs.readFileSync(p, "utf8");
+  } catch {
+    return [];
+  }
+  const rows = [];
+  for (const line of text.split("\n")) {
+    if (!line || !line.includes('"usage"')) continue;
+    let o;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const m = o?.message;
+    const ts = Date.parse(o?.timestamp);
+    if (!m?.usage || Number.isNaN(ts)) continue;
+    rows.push([m.id, ts, messageCost(m)]);
+  }
+  fileRows.set(p, { mtimeMs: st.mtimeMs, size: st.size, rows });
+  return rows;
+}
+
 export function statuslineUsage(now = Date.now()) {
   const weekStart = localDay(now) - 6;
   const seen = new Set();
   const msgs = []; // [ts, cost]
-  for (const p of sessionFiles(projectsRoot(), now)) {
-    let text;
-    try {
-      text = fs.readFileSync(p, "utf8");
-    } catch {
-      continue;
-    }
-    for (const line of text.split("\n")) {
-      if (!line) continue;
-      let o;
-      try {
-        o = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      const m = o?.message;
-      const ts = Date.parse(o?.timestamp);
-      if (!m?.usage || Number.isNaN(ts)) continue;
-      if (localDay(ts) < weekStart || (m.id && seen.has(m.id))) continue;
-      seen.add(m.id);
-      msgs.push([ts, messageCost(m)]);
+  const files = sessionFiles(projectsRoot(), now);
+  for (const k of fileRows.keys()) if (!files.includes(k)) fileRows.delete(k);
+  for (const p of files) {
+    for (const [id, ts, cost] of rowsOf(p)) {
+      if (localDay(ts) < weekStart || (id && seen.has(id))) continue;
+      seen.add(id);
+      msgs.push([ts, cost]);
     }
   }
   msgs.sort((a, b) => a[0] - b[0]);

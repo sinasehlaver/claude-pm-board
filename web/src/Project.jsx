@@ -18,6 +18,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
   const [sectionOpen, setSectionOpen] = useState({ Blocked: false, Done: false });
   const [unattended, setUnattended] = useState(loadUnattended);
   const [color, setColor] = useState(() => loadColor(slug));
+  const [picked, setPicked] = useState(() => new Set());
   const tokens = useTaskTokens(data);
 
   if (!data)
@@ -51,14 +52,25 @@ export default function Project({ slug, data, projects, onBack, reload }) {
   const delTask = (id) => act(() => send("DELETE", `/projects/${slug}/tasks/${id}`));
   const buildTask = (id) =>
     act(() => send("POST", `/projects/${slug}/tasks/${id}/launch`, { bg: termBg(slug, color) }));
-  // Mirrors runnableTasks() in server/backlog.mjs: any non-Done @seq flag => only
-  // those; else every Todo + Doing task (Blocked/Done skipped).
-  const seqTasks = tasks.filter((t) => t.seq && t.state !== "Done");
-  const runMode = seqTasks.length ? "seq" : "all";
-  const runCount = seqTasks.length || tasks.filter((t) => t.state === "Todo" || t.state === "Doing").length;
+  // Mirrors runnableTasks() in server/backlog.mjs: ticked open tasks => only those
+  // (sent by title); none ticked => every Todo + Doing task.
+  const openTitles = tasks.filter((t) => t.state === "Todo" || t.state === "Doing").map((t) => t.title);
+  const pickedTitles = openTitles.filter((x) => picked.has(x));
+  const runMode = pickedTitles.length ? "selected" : "all";
+  const runCount = pickedTitles.length || openTitles.length;
+  const togglePick = (title) =>
+    setPicked((s) => {
+      const n = new Set(s);
+      n.has(title) ? n.delete(title) : n.add(title);
+      return n;
+    });
+  const allPicked = openTitles.length > 0 && pickedTitles.length === openTitles.length;
   const runSeq = () =>
     act(async () => {
-      await send("POST", `/projects/${slug}/tasks/run-seq`, { unattended, bg: termBg(slug, color) });
+      const body = { unattended, bg: termBg(slug, color) };
+      if (pickedTitles.length) body.titles = pickedTitles;
+      await send("POST", `/projects/${slug}/tasks/run-seq`, body);
+      setPicked(new Set());
     });
   const securityAudit = () => act(() => send("POST", `/projects/${slug}/security-audit`, { bg: termBg(slug, color) }));
   const moveTask = async (id) => {
@@ -71,15 +83,21 @@ export default function Project({ slug, data, projects, onBack, reload }) {
 
   return (
     <div className="screen pc has-pc" style={slugStyle(slug, color)}>
-      <Bar title={data.title} onBack={onBack} />
-      {data.description && <p className="proj-desc">{data.description}</p>}
-      <ColorPane
-        value={color}
-        onChange={(n) => {
-          saveColor(slug, n);
-          setColor(n);
-        }}
+      <Bar
+        title={data.title}
+        onBack={onBack}
+        extra={
+          <ColorPane
+            slug={slug}
+            value={color}
+            onChange={(n) => {
+              saveColor(slug, n);
+              setColor(n);
+            }}
+          />
+        }
       />
+      {data.description && <p className="proj-desc">{data.description}</p>}
       {data.path && (
         <p className="muted small">
           {data.kind}: <PathText text={data.path} slug={slug} />
@@ -142,19 +160,28 @@ export default function Project({ slug, data, projects, onBack, reload }) {
         <div className="block-head">
           <span className="block-head-title">
             <h2>Backlog</h2>
-            <Help text="Your task list, grouped by state (Doing / Todo / Blocked / Done). Each task has a ▶ button to launch a Claude Code session on it, a @seq flag to include it in batch orchestration, and a priority pill." />
+            <Help text="Your task list, grouped by state (Doing / Todo / Blocked / Done). Each task has a ▶ button to launch a Claude Code session on it, and open tasks have a tick box to pick which ones the batch Run button works on." />
           </span>
           <span className="bar-item">
             <UnattendedToggle value={unattended} onChange={setUnattended} />
+            {openTitles.length > 1 && (
+              <button
+                className="link"
+                onClick={() => setPicked(allPicked ? new Set() : new Set(openTitles))}
+                title={allPicked ? "untick all tasks" : "tick all open tasks"}
+              >
+                {allPicked ? "Select none" : "Select all"}
+              </button>
+            )}
             <button
               className="link"
               onClick={runSeq}
               disabled={!runCount}
-              title={runMode === "seq" ? "orchestrate the @seq-flagged todos" : "orchestrate all Todo/Doing tasks"}
+              title={runMode === "selected" ? "orchestrate the ticked tasks" : "orchestrate all Todo/Doing tasks"}
             >
-              {`▶▶ Run ${runMode === "seq" ? "@seq" : "all"} (${runCount})`}
+              {`▶▶ Run ${runMode === "selected" ? "selected" : "all"} (${runCount})`}
             </button>
-            <Help text="Launches one Claude Code session that works through your tasks. If any tasks are @seq-flagged it runs only those; with none flagged it runs every Todo and Doing task (Blocked and Done are skipped). The label shows which mode you're in." />
+            <Help text="Launches one Claude Code session that works through your tasks. Tick the boxes on the left of open tasks to run only those; with none ticked it runs every Todo and Doing task (Blocked and Done are skipped). The label shows which mode you're in." />
           </span>
         </div>
         <AddRow onAdd={addTask} />
@@ -201,6 +228,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
                     t={t}
                     slug={slug}
                     rec={tokens[slug]?.[t.title]}
+                    pick={t.state === "Todo" || t.state === "Doing" ? { on: picked.has(t.title), toggle: () => togglePick(t.title) } : null}
                     onEdit={editTask}
                     onDel={delTask}
                     onBuild={buildTask}
@@ -210,10 +238,8 @@ export default function Project({ slug, data, projects, onBack, reload }) {
             </div>
           );
         })}
-        {!tasks.length && <p className="muted">No tasks yet.</p>}
+        <Archived slug={slug} rev={tasks.length} reload={reload} empty={!tasks.length} />
       </section>
-
-      <Archived slug={slug} rev={tasks.length} reload={reload} />
 
       {sessions && sessions.length > 0 && (
         <section className="block">
@@ -272,8 +298,9 @@ export default function Project({ slug, data, projects, onBack, reload }) {
 }
 
 // Removed todos are archived server-side, never deleted; Restore puts one back in Todo.
-function Archived({ slug, rev, reload }) {
+function Archived({ slug, rev, reload, empty }) {
   const [items, setItems] = useState([]);
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     let live = true;
     get(`/projects/${slug}/archive`).then((j) => live && setItems(j.items || []), () => {});
@@ -281,7 +308,7 @@ function Archived({ slug, rev, reload }) {
       live = false;
     };
   }, [slug, rev]);
-  if (!items.length) return null;
+  if (!items.length) return empty ? <p className="muted">No tasks yet.</p> : null;
   const restore = async (title) => {
     try {
       await send("POST", `/projects/${slug}/archive/restore`, { title });
@@ -290,38 +317,56 @@ function Archived({ slug, rev, reload }) {
       alertDialog(e.message);
     }
   };
+  const toggle = () => setOpen((o) => !o);
   return (
-    <details className="block archived">
-      <summary>Archived ({items.length})</summary>
-      {items.map((t) => (
-        <div key={t.id} className="task">
-          <div className="task-main">
-            <span className="ttitle" style={{ cursor: "default" }}>
-              {t.title}
-            </span>
-            <button className="x" onClick={() => restore(t.title)}>
-              restore
-            </button>
+    <div className="tg">
+      <h3
+        className="tg-toggle"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+      >
+        <span className={`chevron${open ? " open" : ""}`}>▸</span>
+        {open ? "Archived" : `Archived (${items.length})`}
+        <Help text="Removed tasks are kept here, never deleted. Restore puts one back in Todo. Click to show or hide." />
+      </h3>
+      {open &&
+        items.map((t) => (
+          <div key={t.id} className="task">
+            <div className="task-main">
+              <span className="ttitle" style={{ cursor: "default" }}>
+                {t.title}
+              </span>
+              <button className="x" onClick={() => restore(t.title)}>
+                restore
+              </button>
+            </div>
+            <div className="chips">
+              <span className="muted small">
+                removed {t.removed || "?"} · was {t.from || "?"}
+              </span>
+            </div>
           </div>
-          <div className="chips">
-            <span className="muted small">
-              removed {t.removed || "?"} · was {t.from || "?"}
-            </span>
-          </div>
-        </div>
-      ))}
-    </details>
+        ))}
+    </div>
   );
 }
 
-function Bar({ title, onBack }) {
+function Bar({ title, onBack, extra }) {
   return (
-    <header className="bar">
+    <header className={"bar" + (extra ? " bar-titled" : "")}>
       <button className="back" onClick={onBack}>
         ‹
       </button>
       <h1>{title}</h1>
-      <span style={{ width: 32 }} />
+      {extra || <span style={{ width: 32 }} />}
     </header>
   );
 }
@@ -397,6 +442,21 @@ function StatusSheet({ state, editing, onEdit, onSave, onClose }) {
 // do next. Edit goes through the same sheet as Status.
 function ResumePanel({ slug, state, onContinue, onEdit }) {
   const [copied, setCopied] = useState(false);
+  const okey = "pm.resumeOpen." + slug;
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(okey) !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const toggle = () =>
+    setOpen((o) => {
+      try {
+        localStorage.setItem(okey, o ? "0" : "1");
+      } catch {}
+      return !o;
+    });
   const r = state?.resume || EMPTY_RESUME;
   const filled = Object.values(r).some(Boolean);
   const artifacts = r.artifacts.split(",").map((a) => a.trim()).filter(Boolean);
@@ -413,7 +473,22 @@ function ResumePanel({ slug, state, onContinue, onEdit }) {
     <section className="block resume">
       <div className="block-head">
         <span className="block-head-title">
-          <h2>Where you left off</h2>
+          <h2
+            className="tg-toggle"
+            role="button"
+            tabIndex={0}
+            aria-expanded={open}
+            onClick={toggle}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggle();
+              }
+            }}
+          >
+            <span className={`chevron${open ? " open" : ""}`}>▸</span>
+            Where you left off
+          </h2>
           <Help text="The Resume block of this project's state file: the last test/benchmark result, the exact command to re-run it, the branch/variant, and where its artifacts live. Sessions launched from here keep it up to date; Continue opens a session that re-orients from it without re-running anything." />
         </span>
         <span className="bar-item">
@@ -425,8 +500,8 @@ function ResumePanel({ slug, state, onContinue, onEdit }) {
           </button>
         </span>
       </div>
-      {state?.updated && <p className="muted small resume-updated">state updated {ago(state.updated)}</p>}
-      {filled ? (
+      {open && state?.updated && <p className="muted small resume-updated">state updated {ago(state.updated)}</p>}
+      {!open ? null : filled ? (
         <dl className="resume-dl">
           {r.lastResult && (
             <>
@@ -555,10 +630,19 @@ function AddRow({ onAdd }) {
   );
 }
 
-function Task({ t, slug, rec, onEdit, onDel, onBuild, onMove }) {
+function Task({ t, slug, rec, pick, onEdit, onDel, onBuild, onMove }) {
   return (
     <div className="task">
       <div className="task-main">
+        {pick && (
+          <input
+            type="checkbox"
+            className="tpick"
+            checked={pick.on}
+            onChange={pick.toggle}
+            aria-label={`select "${t.title}" for the batch run`}
+          />
+        )}
         <button
           className="ttitle"
           onClick={async () => {
@@ -571,21 +655,6 @@ function Task({ t, slug, rec, onEdit, onDel, onBuild, onMove }) {
         <TokBadge rec={rec} />
         <button className="build" title="build with Claude" onClick={() => onBuild(t.id)}>
           ▶
-        </button>
-        <button
-          className={"seq" + (t.seq ? " on" : "")}
-          title="flag for the Run @seq orchestrator"
-          onClick={() => onEdit(t.id, { seq: !t.seq })}
-        >
-          @seq
-        </button>
-        <button
-          className={"pri p" + (t.priority || 0)}
-          onClick={() =>
-            onEdit(t.id, { priority: t.priority === 3 ? null : (t.priority || 0) + 1 })
-          }
-        >
-          {t.priority ? "p" + t.priority : "–"}
         </button>
         <button className="x" onClick={() => onDel(t.id)}>
           ×
