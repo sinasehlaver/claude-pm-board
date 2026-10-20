@@ -14,7 +14,7 @@ and let them run unattended.
 
 - **Project board** — one card per project with a one-line description (the first paragraph of the project's `README.md`),
   status, open-task count, last activity, and a blocked marker. Search, sort (recent by default and remembered / blocked first / stalest / A–Z) and Filter; Ideas is a slim pill above the list, outside the sort; a
-  "stale" badge after 7 idle days; a color per project (swatches on the project page, stored in
+  "stale" badge after 7 idle days; a color per project (22 vibrant swatches, a "Yours" row of custom colors you have used, or a new one from the editor, on the project page or from the dot before each Home card title, stored in
   your browser); light/dark theme. Two tabs: **Projects** (tool entries from
   `entries.json` sit in a collapsed "tools" group) and **Tools** (Env Manager, Ports, Changes). Sessions and Doctor
   are under **Help**.
@@ -105,14 +105,15 @@ profile, not from the board.
   `echo $COLORTERM` (expect `truecolor`); if empty, add `export COLORTERM=truecolor` to `~/.zshrc`.
 - **Theme**: pick light or dark inside Claude Code with `/theme`, and match the terminal profile
   (iTerm2 → Settings → Profiles → Colors → Color Presets; Terminal.app → Settings → Profiles).
-- **Per-project tint**: the swatch you pick on a project page (or its automatic hue) tints the
+- **Per-project tint**: the swatch or custom color you pick on a project page (or its automatic hue) tints the
   background of terminal windows launched from that page (▶, Run selected, Continue, Security audit,
   reopen session) to a dark shade of that color (about 14% brightness), so windows of different
   projects are easy to tell apart. Pick "default" to keep the hue derived from the slug. The tint is
   set on the window through AppleScript (`set background color`), so it overrides the profile's
   background for that window only. A window launched without a tint is set to black (`#000000`)
   in both iTerm2 and Terminal.app. The unattended relay runs headless and is not tinted. If your
-  `~/.zshrc` wraps `claude` and repaints the background, remove that wrapper's color line or it will win.
+  `~/.zshrc` wraps `claude` to repaint the background, have it skip when `PM_LAUNCHED=1` (pm exports it in
+  every window it opens) or it will override the tint.
 - **`scripts/setup.sh`** only prints this advice. It never modifies your terminal profiles.
 - **Turning color off or forcing it**: `NO_COLOR=1` disables ANSI color in most CLIs; `FORCE_COLOR=1`
   forces it when output is piped. The board never sets either.

@@ -3,7 +3,7 @@ import { ago, get, send } from "./api";
 import Help from "./Help.jsx";
 import LatestTodos from "./LatestTodos.jsx";
 import { RelayStrip } from "./relay.jsx";
-import { loadColor, slugStyle, termBg } from "./projectColor.jsx";
+import { ColorPane, loadColor, saveColor, slugStyle, termBg } from "./projectColor.jsx";
 import { alertDialog, promptDialog } from "./dialog.jsx";
 
 const usd = (n) => (n == null ? "—" : "$" + n.toFixed(2));
@@ -56,6 +56,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   const [ideaMsg, setIdeaMsg] = useState({});
   const ideaTimer = useRef(null);
   const [query, setQuery] = useState("");
+  const [, setColorTick] = useState(0);
   const [sort, setSort] = useState(() => loadPref(SORT_KEY, (v) => v in SORTS, "recent"));
   const [tab, setTab] = useState(() => loadPref(TAB_KEY, (v) => TABS.some(([k]) => k === v), "project"));
   const [toolsOpen, setToolsOpen] = useState(() => loadPref(TOOLS_OPEN_KEY, (v) => v === "1", "0") === "1");
@@ -149,6 +150,19 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
       >
         <div className="card-top">
           <span className="title">
+            {!p.pinned && (
+              <span className="card-color" onClick={(e) => e.stopPropagation()}>
+                <ColorPane
+                  slug={p.slug}
+                  value={loadColor(p.slug)}
+                  align="left"
+                  onChange={(n) => {
+                    saveColor(p.slug, n);
+                    setColorTick((t) => t + 1);
+                  }}
+                />
+              </span>
+            )}
             {p.pinned ? "💡 " : ""}
             {p.title}
             {p.adhoc && <span className="tag">ad-hoc</span>}
@@ -178,7 +192,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
             </button>
               {p.running?.length > 0 && (
                 <a
-                  className="open-btn"
+                  className="app-open-btn"
                   href={`http://127.0.0.1:${p.running[0].port}`}
                   target="_blank"
                   rel="noreferrer noopener"

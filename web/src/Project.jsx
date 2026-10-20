@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ago, get, send } from "./api";
 import Help from "./Help.jsx";
-import PathText, { OpenBtn } from "./PathText.jsx";
+import PathText, { FileLink } from "./PathText.jsx";
 import TokBadge, { useTaskTokens } from "./TokBadge.jsx";
 import { UnattendedToggle, loadUnattended } from "./relay.jsx";
 import { ColorPane, slugStyle, loadColor, saveColor, termBg } from "./projectColor.jsx";
@@ -278,7 +278,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
         </div>
         {timelineOpen && handoff && (
           <p className="muted small">
-            newest handoff: {handoff} <OpenBtn path={handoff} />
+            newest handoff: <FileLink path={handoff} />
           </p>
         )}
         {timelineOpen && <ul className="timeline">
@@ -287,7 +287,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
               <span className="k">{KIND[a.kind] || "•"}</span>
               <span className="d">{String(a.date).slice(0, 10)}</span>
               <span className="s">{a.summary}</span>
-              {a.kind === "handoff" && a.ref && <OpenBtn path={a.ref} slug={slug} />}
+              {a.kind === "handoff" && a.ref && <FileLink path={a.ref} slug={slug} />}
             </li>
           ))}
           {!activity?.length && <li className="muted">no activity harvested yet</li>}

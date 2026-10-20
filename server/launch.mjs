@@ -15,7 +15,8 @@ const osaStr = (s) => `"${String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}
 
 // The launched window would otherwise inherit CLAUDE_CODE_CHILD_SESSION from the
 // pm server's process tree and start as a nested child (transcript saving off).
-const CLEAN_ENV = "unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SSE_PORT; ";
+// PM_LAUNCHED lets a user's shell `claude` wrapper skip repainting pm's tint.
+const CLEAN_ENV = "unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SSE_PORT; export PM_LAUNCHED=1; ";
 
 // Open a Mac terminal running `inner` (a shell command line). iTerm's `command`
 // param does NOT go through a shell (naive execvp tokenization — `&&` breaks it),
