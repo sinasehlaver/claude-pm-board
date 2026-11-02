@@ -81,6 +81,13 @@ export function softStop(st, cfg, now = Date.now()) {
   return null;
 }
 
+// Fill job (spec.fill.stop7d, a 0..1 fraction): today's share of the weekly quota is used up.
+export function fillStop(st, spec) {
+  const limit = spec?.fill?.stop7d;
+  const w = st.windows.seven_day;
+  return typeof limit === "number" && w ? w.utilization >= limit : false;
+}
+
 const LIMIT_TEXT = /(hit your|reached your|usage|rate)[^.]{0,30}limit|limit reached|rate_limit/i;
 
 // Did this run end because of the rate limit? -> { type, resetsAtMs|null } | null
@@ -172,6 +179,16 @@ export function writeJson(path, obj) {
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(obj, null, 2));
   renameSync(tmp, path);
+}
+
+// Latest real rate-limit numbers a relay run saw, for the fill planner (fill.mjs).
+export const limitsPath = (root) => join(root, ".claude", "pm", "limits.json");
+export function saveLimits(root, windows, now = Date.now()) {
+  const w = (k) =>
+    windows[k] ? { pct: Math.round(windows[k].utilization * 1000) / 10, resetsAt: windows[k].resetsAt ?? null } : null;
+  try {
+    writeJson(limitsPath(root), { at: now, source: "relay", fiveHour: w("five_hour"), week: w("seven_day") });
+  } catch {}
 }
 
 // Jobs newest-first; a "running"/"waiting" job whose pid is gone is reported "dead".
@@ -311,6 +328,7 @@ function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
 
   const st = emptyRun();
   let softStopped = null;
+  let filled = false;
   const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
   rl.on("line", (line) => {
     let ev;
@@ -320,8 +338,15 @@ function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
       return;
     }
     foldEvent(st, ev);
+    if (ev?.type === "rate_limit_event") saveLimits(spec.root, st.windows);
     onEvent?.(ev, st);
-    if (!softStopped) {
+    if (!filled && !softStopped && fillStop(st, spec)) {
+      filled = true;
+      note(`weekly ${Math.round(st.windows.seven_day.utilization * 100)}% — today's fill target reached, stopping`);
+      child.kill("SIGINT");
+      setTimeout(() => child.kill("SIGKILL"), cfg.killGraceMs).unref();
+    }
+    if (!softStopped && !filled) {
       const s = softStop(st, cfg);
       if (s) {
         softStopped = s;
@@ -336,7 +361,7 @@ function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
     child.on("error", (e) => {
       st.result = { isError: true, text: `spawn failed: ${e.message}`, subtype: "spawn" };
     });
-    child.on("close", () => resolve({ st, softStopped }));
+    child.on("close", () => resolve({ st, softStopped, filled }));
   });
 }
 
@@ -418,6 +443,7 @@ export async function runRelay(specPath, env = process.env) {
     label: spec.label,
     cwd: spec.cwd,
     tasks: spec.tasks,
+    fill: spec.fill || null,
     status: "running",
     pid: process.pid,
     startedAt: Date.now(),
@@ -477,7 +503,7 @@ export async function runRelay(specPath, env = process.env) {
     save();
     log(job.attempt === 1 ? "run 1: launching" : `run ${job.attempt}: resuming session ${resumeId ? resumeId.slice(0, 8) : "(new)"}`);
     const prevOpen = open.length;
-    const { st, softStopped } = await runChild({
+    const { st, softStopped, filled } = await runChild({
       cfg,
       spec,
       prompt,
@@ -503,6 +529,7 @@ export async function runRelay(specPath, env = process.env) {
     }
     open = openTasks(spec.root, spec.tasks);
     job.open = open.length;
+    if (filled) return finish("filled", `today's fill target reached, ${open.length} todo(s) left for later`);
     const d = decide({ st, softStopped, open: open.length, prevOpen, now: Date.now(), cfg, c });
 
     if (d.kind === "done") return finish("done", d.why);

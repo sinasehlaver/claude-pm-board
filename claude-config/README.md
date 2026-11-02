@@ -16,7 +16,7 @@ copy what you want into your workspace (`<workspace>` = the folder that holds yo
 | `skills/retro/` | Reviews the conversation for Claude's own mistakes and saves each as a feedback memory | `<workspace>/.claude/skills/` |
 | `memory/` | Starter memories: `ask-questions-via-askuserquestion`, `pm-board-plan`, `board-todo-style` (+ `MEMORY.md` index) | `~/.claude/projects/<workspace-slug>/memory/` |
 | `retrospectives/lessons-and-action-plan.md` | The recurring failure patterns behind the hooks and rules, each with a prevention action | anywhere you keep notes |
-| `statusline/` | Status line showing session / 5h / today / 7d spend | see [Tools I use](#tools-i-use) |
+| `statusline/` | `usage.py` for pm's status line (session / 5h / today / 7d spend) | see [Tools I use](#tools-i-use) |
 
 ## Hook wiring
 
@@ -100,20 +100,10 @@ claude plugin install pyright-lsp@claude-plugins-official
 
 ### statusline
 
-Needs `jq` and `python3`. `statusline.sh` looks for `usage.py` in its own folder. Edit `PRICING` in
-`usage.py` when rates change; the cost is an estimate from your local session logs, not a bill.
-
-```bash
-mkdir -p ~/.claude/statusline && cp statusline/statusline.sh statusline/usage.py ~/.claude/statusline/
-```
-
-Then add this to `~/.claude/settings.json`:
-
-```json
-{
-  "statusLine": { "type": "command", "command": "bash ~/.claude/statusline/statusline.sh" }
-}
-```
+pm builds the status line for you: `scripts/setup.sh` writes `~/.claude/statusline/statusline.sh` (plus
+`usage.py`) and points `statusLine` at it if you have none. Change what it shows any time in pm → Setup →
+Status line. Needs `jq`; the spend segments also need `python3`. Edit `PRICING` in `usage.py` when rates
+change; the cost is an estimate from your local session logs, not a bill.
 
 ## Adding your own tool to this list
 

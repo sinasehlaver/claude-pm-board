@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PM_ROOT, settingsArgs } from "./paths.mjs";
 import { newRunId, markPrompt, registerRun } from "./tokens.mjs";
+import { ARCH, claudeBin, modelArg } from "./setup.mjs";
 import { relayDir, specPathFor, writeJson, pruneRelay, BACKLOG_CLI } from "./relay.mjs";
 
 const DRYRUN = process.env.PM_LAUNCH_DRYRUN === "1";
@@ -18,19 +19,14 @@ const osaStr = (s) => `"${String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}
 // PM_LAUNCHED lets a user's shell `claude` wrapper skip repainting pm's tint.
 const CLEAN_ENV = "unset CLAUDE_CODE_CHILD_SESSION CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SSE_PORT; export PM_LAUNCHED=1; ";
 
-// Open a Mac terminal running `inner` (a shell command line). iTerm's `command`
-// param does NOT go through a shell (naive execvp tokenization — `&&` breaks it),
-// so create the window then `write text`, which the session's shell evaluates.
+// Open a Terminal.app window running `inner` (a shell command line) via `do script`.
 // `bg` = "#rrggbb" window tint (the project color); anything else is ignored.
 function termOsa(rawInner, bg) {
   const inner = CLEAN_ENV + rawInner;
-  const iterm = existsSync("/Applications/iTerm.app");
   const tint = /^#[0-9a-f]{6}$/i.test(bg || "") ? bg : "#000000";
   const rgb = [1, 3, 5].map((i) => parseInt(tint.slice(i, i + 2), 16) * 257).join(", ");
-  const osa = iterm
-    ? `tell application "iTerm"\n  activate\n  create window with default profile\n  tell current session of current window\n    set background color to {${rgb}}\n    write text ${osaStr(inner)}\n  end tell\nend tell`
-    : `tell application "Terminal"\n  activate\n  set t to do script ${osaStr(inner)}\n  set background color of t to {${rgb}}\nend tell`;
-  return { osa, term: iterm ? "iterm" : "terminal" };
+  const osa = `tell application "Terminal"\n  activate\n  set t to do script ${osaStr(inner)}\n  set background color of t to {${rgb}}\nend tell`;
+  return { osa, term: "terminal" };
 }
 
 // How a session leaves the project resumable: the state file's `## Resume` block
@@ -243,6 +239,23 @@ export function seedForSecurityAudit({ slug, adhoc }) {
   return out.join("\n");
 }
 
+// Seed for the Done section's "Compact" button: the compact-done skill ships in the pm repo
+// (unpacked in the packaged app, like the CLI it drives) and proposes before it writes.
+const COMPACT_SKILL = fileURLToPath(new URL("../skills/compact-done/SKILL.md", import.meta.url)).replace(
+  /app\.asar([\\/])/,
+  "app.asar.unpacked$1",
+);
+export function seedForCompactDone({ slug }) {
+  return [
+    `Compact the old Done items of the "${slug}" backlog using the compact-done skill.`,
+    "",
+    `Read ${COMPACT_SKILL} first and follow it. The backlog CLI is \`node ${BACKLOG_CLI}\`.`,
+    "Show me the proposal and wait for my OK before applying it. Touch nothing but this backlog's Done section.",
+    "",
+    TOOL_NOTE,
+  ].join("\n");
+}
+
 // Seed prompt for Doctor's "Fix with Claude" (one finding) and "Fix all" (every open one, so N
 // findings cost one session's startup context instead of N): an interactive session that
 // interviews the user (AskUserQuestion) before changing anything. Evidence comes from
@@ -346,6 +359,7 @@ const PACING_RELAY = [
   `  node ${BACKLOG_CLI} move <slug> <Todo|Doing|Blocked|Done> "<exact title>" ["note"]`,
   `  node ${BACKLOG_CLI} add <slug> "<title>" ["note"]`,
   `  node ${BACKLOG_CLI} state <slug> now "<headline>" ["detail" ...]`,
+  `  node ${BACKLOG_CLI} state <slug> next <add|remove> "<item>" ["<item>" ...]   (the state file's Next list)`,
   `  node ${BACKLOG_CLI} state <slug> resume <last-result|re-run|branch|artifacts> "<value>"`,
   "(record the Resume block that way: last test/benchmark result, re-run command, branch, artifact paths)",
   "If a todo needs a denied command or a decision only the user can make, `move` it to",
@@ -569,8 +583,7 @@ function seedForIdeaPromotion({ tasks, relay = false }) {
   return out.join("\n");
 }
 
-// Open a Mac terminal running an arbitrary command in `cwd`. Same osascript /
-// iTerm-else-Terminal path as launchClaude; `PM_LAUNCH_DRYRUN=1` returns the
+// Open a Terminal.app window running an arbitrary command in `cwd`. Same osascript as launchClaude; `PM_LAUNCH_DRYRUN=1` returns the
 // command instead of spawning. Used by the relay launch.
 export function launchCommand({ cwd, inner: cmd, bg }) {
   const dir = cwd && existsSync(cwd) ? cwd : PM_ROOT;
@@ -593,7 +606,7 @@ const RELAY_CLI = fileURLToPath(new URL("./relay-cli.mjs", import.meta.url)).rep
   "app.asar.unpacked$1",
 );
 
-function writeRelaySpec({ cwd, prompt, label, tasks }) {
+function writeRelaySpec({ cwd, prompt, label, tasks, fill }) {
   const dir = cwd && existsSync(cwd) ? cwd : PM_ROOT;
   pruneRelay(PM_ROOT);
   mkdirSync(relayDir(PM_ROOT), { recursive: true });
@@ -608,6 +621,8 @@ function writeRelaySpec({ cwd, prompt, label, tasks }) {
     prompt,
     track: true,
     tasks: tasks.map((t) => ({ slug: t.slug, title: t.title })),
+    ...(fill ? { fill } : {}),
+    ...(modelArg() ? { modelArg: modelArg() } : {}),
   });
   return { id, specPath };
 }
@@ -616,10 +631,12 @@ export function launchRelay(args) {
   const { id, specPath } = writeRelaySpec(args);
   return launchCommand({
     cwd: PM_ROOT,
-    inner: `PM_ROOT=${shq(PM_ROOT)} caffeinate -is node ${shq(RELAY_CLI)} ${shq(specPath)}`,
+    inner: `PM_ROOT=${shq(PM_ROOT)} CLAUDE_BIN=${shq(claudeBin())} ${ARCH}caffeinate -is node ${shq(RELAY_CLI)} ${shq(specPath)}`,
   }).then((r) => ({ ...r, relay: true, job: id }));
 }
 
+const claudeCmd = () => ARCH + shq(claudeBin()).replace(/^'(claude)'$/, "$1") + " ";
+const modelFlag = () => (modelArg() ? `--model ${shq(modelArg())} ` : "");
 const settingsFlags = () => settingsArgs().map((a) => shq(a) + " ").join("");
 
 // Same relay job, but as a detached background process with no terminal window — for
@@ -628,11 +645,11 @@ const settingsFlags = () => settingsArgs().map((a) => shq(a) + " ").join("");
 export function launchRelayDetached(args) {
   const { id, specPath } = writeRelaySpec(args);
   if (DRYRUN) return { dryrun: true, relay: true, job: id, specPath };
-  const env = { ...process.env, PM_ROOT };
+  const env = { ...process.env, PM_ROOT, CLAUDE_BIN: claudeBin() };
   for (const k of ["CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"]) delete env[k];
   const [cmd, argv] =
     process.platform === "darwin"
-      ? ["caffeinate", ["-is", process.execPath, RELAY_CLI, specPath]]
+      ? ARCH ? ["arch", ["-arm64", "caffeinate", "-is", process.execPath, RELAY_CLI, specPath]] : ["caffeinate", ["-is", process.execPath, RELAY_CLI, specPath]]
       : [process.execPath, [RELAY_CLI, specPath]];
   const child = spawn(cmd, argv, { cwd: PM_ROOT, env, detached: true, stdio: "ignore" });
   child.on("error", () => {});
@@ -645,7 +662,7 @@ export function launchClaude({ cwd, prompt, resumeId, todos, bg }) {
   const dir = cwd && existsSync(cwd) ? cwd : PM_ROOT;
   let inner;
   if (resumeId) {
-    inner = `cd ${shq(dir)} && claude ${settingsFlags()}--resume ${shq(resumeId)}`;
+    inner = `cd ${shq(dir)} && ${claudeCmd()}${settingsFlags()}--resume ${shq(resumeId)}`;
   } else {
     const seed = join(mkdtempSync(join(tmpdir(), "pm-seed-")), "prompt.txt");
     let text = prompt || "";
@@ -655,7 +672,7 @@ export function launchClaude({ cwd, prompt, resumeId, todos, bg }) {
       text = markPrompt(text, id);
     }
     writeFileSync(seed, text);
-    inner = `cd ${shq(dir)} && claude ${settingsFlags()}"$(cat ${shq(seed)})"`;
+    inner = `cd ${shq(dir)} && ${claudeCmd()}${settingsFlags()}${modelFlag()}"$(cat ${shq(seed)})"`;
   }
   const { osa, term } = termOsa(inner, bg);
   if (DRYRUN) return Promise.resolve({ dryrun: true, term, cmd: inner, osa });

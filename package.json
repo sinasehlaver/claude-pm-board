@@ -37,11 +37,13 @@
     "files": [
       "electron/**",
       "server/**",
+      "skills/**",
       "web/dist/**",
       "package.json"
     ],
     "asarUnpack": [
-      "server/**"
+      "server/**",
+      "skills/**"
     ],
     "mac": {
       "target": "dmg",

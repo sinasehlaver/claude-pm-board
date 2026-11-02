@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Palette from "./Palette.jsx";
+import { isTyping } from "./palette-core.mjs";
 import { get, onStream } from "./api";
 import Home from "./Home.jsx";
 import Project from "./Project.jsx";
 import Sessions from "./Sessions.jsx";
 import Doctor from "./Doctor.jsx";
+import Setup from "./Setup.jsx";
 import Ports from "./Ports.jsx";
 import Changes from "./Changes.jsx";
 import Envs from "./Envs.jsx";
-import Help from "./Help.jsx";
+import Tour, { TOUR_KEY } from "./Tour.jsx";
 
 const THEME_KEY = "pm.theme";
 
@@ -85,6 +88,7 @@ function HoverToggle({ selfSlug }) {
 //   "/"               -> home
 //   "/sessions"        -> sessions
 //   "/doctor"          -> doctor
+//   "/setup"           -> launch setup (auto-opened on first run)
 //   "/envs"            -> env manager
 //   "/ports"           -> listening ports
 //   "/changes"         -> git changes across repos
@@ -94,6 +98,7 @@ function parsePath(pathname) {
   if (parts[0] === "project" && parts[1]) return { view: "home", sel: decodeURIComponent(parts[1]) };
   if (parts[0] === "sessions") return { view: "sessions", sel: null };
   if (parts[0] === "doctor") return { view: "doctor", sel: null };
+  if (parts[0] === "setup") return { view: "setup", sel: null };
   if (parts[0] === "envs") return { view: "envs", sel: null };
   if (parts[0] === "ports") return { view: "ports", sel: null };
   if (parts[0] === "changes") return { view: "changes", sel: null };
@@ -103,6 +108,7 @@ function pathFor(view, sel) {
   if (sel) return "/project/" + encodeURIComponent(sel);
   if (view === "sessions") return "/sessions";
   if (view === "doctor") return "/doctor";
+  if (view === "setup") return "/setup";
   if (view === "envs") return "/envs";
   if (view === "ports") return "/ports";
   if (view === "changes") return "/changes";
@@ -120,19 +126,93 @@ export default function App() {
 
   const [selfSlug, setSelfSlug] = useState(null); // PM_SELF_SLUG: the board's own project, shown in a side pane
   const [pmOpen, setPmOpen] = useState(false);
+  const [setupBad, setSetupBad] = useState(0); // failing launch checks -> banner
   const [pmDetail, setPmDetail] = useState(null);
 
   const pingTimer = useRef(0);
+  const [palOpen, setPalOpen] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
+  const closeTour = useCallback(() => { localStorage.setItem(TOUR_KEY, "1"); setTourOpen(false); }, []);
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+  const palCommands = useMemo(() => {
+    const go = (v) => () => {
+      setSel(null);
+      setView(v);
+    };
+    const click = (s) => () => document.querySelector(s)?.click();
+    const nav = [
+      ["home", "Home", "g h"],
+      ["sessions", "Sessions", "g s"],
+      ["doctor", "Doctor", "g d"],
+      ["setup", "Setup", "g u"],
+      ["ports", "Ports", "g p"],
+      ["changes", "Changes", "g c"],
+      ["envs", "Envs", "g e"],
+    ].map(([v, l, keys]) => ({ id: "nav-" + v, label: "Go to " + l, keys, run: go(v) }));
+    const projs = (projects || []).map((p) => ({
+      id: "proj-" + p.slug,
+      label: "Open project: " + (p.name || p.slug),
+      keywords: p.slug,
+      run: () => setSel(p.slug),
+    }));
+    return [
+      ...nav,
+      ...projs,
+      { id: "theme", label: "Toggle theme (light / dark)", keys: "g t", run: click(".theme-toggle-fixed:not(.hover-fixed) .theme-toggle:not(.pal-open)") },
+      { id: "hover", label: "Toggle hover mode (compact, on top)", keys: "g o", run: click(".hover-fixed .theme-toggle") },
+      { id: "tour", label: "Take the tour", run: () => { setSel(null); setView("home"); setTimeout(() => setTourOpen(true), 150); } },
+      ...(sel ? [{ id: "back", label: "Back to the board", keys: "g b", run: () => setSel(null) }] : []),
+    ];
+  }, [projects, sel]);
+
+  // Ctrl/Cmd+K toggles the palette; "g <key>" chords navigate (ignored while typing or in a dialog)
+  useEffect(() => {
+    let chord = 0;
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPalOpen((o) => !o);
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target) || document.querySelector("[role=dialog]")) return;
+      if (chord && Date.now() - chord < 1200) {
+        chord = 0;
+        const c = palCommands.find((x) => x.keys === "g " + e.key.toLowerCase());
+        if (c) {
+          e.preventDefault();
+          c.run();
+        }
+      } else chord = e.key === "g" ? Date.now() : 0;
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [palCommands]);
   const loadList = useCallback(() => get("/projects?kind=all").then(setProjects), []);
   const loadPm = useCallback(() => selfSlug && get("/projects/" + selfSlug).then(setPmDetail), [selfSlug]);
 
   useEffect(() => {
     get("/health").then((h) => setSelfSlug(h.self || null)).catch(() => {});
+    get("/setup")
+      .then((d) => {
+        setSetupBad(d.checks.filter((c) => !c.ok).length);
+        // auto-open once per browser, and never over a deep link
+        if (d.firstRun && initial.view === "home" && !initial.sel && !localStorage.getItem("pm.setupSeen")) {
+          localStorage.setItem("pm.setupSeen", "1");
+          setView("setup");
+        }
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
     if (pmOpen) loadPm();
   }, [pmOpen, loadPm]);
+  useEffect(() => {
+    if (projects && !sel && view === "home" && !localStorage.getItem(TOUR_KEY)) {
+      const t = setTimeout(() => setTourOpen(true), 600);
+      return () => clearTimeout(t);
+    }
+  }, [!!projects, sel, view]);
   const loadSessions = useCallback(() => get("/sessions").then(setSessions), []);
   const loadDetail = useCallback((s) => get("/projects/" + s).then(setDetail), []);
 
@@ -199,6 +279,8 @@ export default function App() {
       onOpen={setSel}
       reload={loadSessions}
     />
+  ) : view === "setup" ? (
+    <Setup onBack={() => setView("home")} onSaved={(d) => setSetupBad(d.checks.filter((c) => !c.ok).length)} />
   ) : view === "doctor" ? (
     <Doctor onBack={() => setView("home")} />
   ) : view === "envs" ? (
@@ -215,6 +297,9 @@ export default function App() {
       onOpen={setSel}
       onSessions={() => setView("sessions")}
       onDoctor={() => setView("doctor")}
+      onSetup={() => setView("setup")}
+      onTour={() => { setTimeout(() => setTourOpen(true), 150); }}
+      setupBad={setupBad}
       onEnvs={() => setView("envs")}
       onPorts={() => setView("ports")}
       onChanges={() => setView("changes")}
@@ -227,12 +312,13 @@ export default function App() {
       <div className="theme-toggle-fixed hover-fixed">
         <HoverToggle selfSlug={selfSlug} />
       </div>
+      <Tour open={tourOpen} onClose={closeTour} projects={projects || []} sel={sel} onNav={(s) => { setView("home"); setSel(s); }} />
+      <Palette open={palOpen} onClose={() => setPalOpen(false)} commands={palCommands} />
       <div className="theme-toggle-fixed">
+        <button className="theme-toggle pal-open" title="Command palette" onClick={() => setPalOpen(true)}>
+          {mac ? "⌘K" : "Ctrl K"}
+        </button>
         <ThemeToggle />
-        <Help
-          text="Switches between light and dark colors. Your choice is remembered on this device."
-          side="left"
-        />
       </div>
       {body}
       {!sel && view === "home" && (

@@ -36,11 +36,18 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
   against what it will write and appends every dropped title to
   `$PM_ROOT/.claude/backlog-archive/<slug>.md`, and snapshots the previous file to
   `backlog-archive/.snapshots/` (keep 20/slug). Don't write backlog files any other way.
-  Unknown `##` sections are preserved, not dropped. `backlog-cli.mjs` stays add/move/list/create:
+  Unknown `##` sections are preserved, not dropped. `backlog-cli.mjs` stays add/move/list/create (+ `state now|resume|next`):
   `create <slug> …` writes a NEW project's state+backlog (create-only, refuses an existing slug);
   no delete/rename; `add` rejects duplicate exact titles; `move` is exact-title only.
+  `compact <slug> candidates|apply <plan.json>` (`server/compact.mjs`) is the one rewording path: only
+  Done items older than 7 days, all-or-nothing validation, written through `writeBacklog` so the
+  originals are archived. Driven by `skills/compact-done/SKILL.md` (shipped + `asarUnpack`ed) via
+  the launch-guarded `POST /api/projects/:slug/compact-done`.
 - **Task ids are positional**, shift after any write. Match by title when it must be stable.
-- **No LLM calls from pm.** It only seeds terminal Claude Code sessions (`server/launch.mjs`).
+- **No LLM calls from pm.** It only seeds terminal Claude Code sessions (`server/launch.mjs`, Terminal.app only).
+  The binary comes from `server/setup.mjs` (`pm/prefs.json`, user-owned; `PUT /api/setup` is launch-guarded and
+  only accepts a path `findClaudes()` detected). On Apple Silicon every claude/relay launch is prefixed
+  `arch -arm64` (`ARCH`) so a Rosetta shell can't pick the wrong native package.
   Prompt text goes through a temp file / spec file, **never** interpolated into a shell command.
 - **Bind is loopback by default** (`server/bind.mjs`): `PM_HOST` non-loopback needs
   `PM_TOKEN` unless it's a Tailscale `100.64/10` address; server exits otherwise. Never
@@ -70,6 +77,16 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
   Relay args also carry `--strict-mcp-config --append-system-prompt QUIET_NOTE` (+ `TOOL_NOTE`), plus
   `--disable-slash-commands` unless the prompt mentions "skill"; relay and `launchClaude` add `--settings $PM_ROOT/.claude/settings.json` when it
   exists (a project-dir cwd doesn't load it otherwise).
+- **Fill** (`server/fill.mjs`): pm still reads no usage itself beyond rate-limit numbers Claude Code
+  emits — relay runs write `.claude/pm/limits.json` (`saveLimits`), the user's statusline may write
+  `~/.claude/rate-limits.json`. Only todos the user marked auto (`.claude/pm/auto-todos.json`, keyed by
+  title, user-owned; `ideas` refused) or open todos of an auto project (`auto-projects.json`, `[slug]`,
+  re-read every pass) ever run; settings in `.claude/pm/fill.json`. Launches only via
+  `launchRelayDetached` with `spec.fill.stop7d`; the relay ends such a job `filled`. All three write routes +
+  `POST /api/fill/run` are `canLaunch`-guarded. The timer never launches while any relay job is live.
+  A Fill now refused for quota (`decision.wait`) sets `fill.json` `pending` (route 202): the timer then
+  decides as if manual (ignores enabled + idle, still respects quota) and clears it on launch. Windows
+  roll to 0% past their reset; a reading with no reset time rolls once it is a whole period old.
 - **Portability**: no `/Users/<name>` (or other machine-specific) paths in shipped source
   or docs. `PM_ROOT` defaults to `process.cwd()`; the Electron shell passes its own default.
 - macOS-only pieces (osascript terminal launch, Electron shell, `caffeinate`) must be
@@ -81,15 +98,30 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
   to non-ideas build prompts. `TOOL_NOTE` (tool names are case-sensitive: `Bash`, not `bash`) is
   appended to the task, sequential and cross-project seeds and to the relay's `QUIET_NOTE`.
 
+- **Status line builder** (`server/statusline.mjs`, `web/src/StatusLine.jsx` in Setup, `/api/statusline*`, all three
+  `canLaunch`-guarded): writes only `~/.claude/statusline/statusline.sh` (+ copies `usage.py`) and `statusLine` in
+  `~/.claude/settings.json` (`PM_CLAUDE_DIR` overrides `~/.claude`; tests set it). Segments are a fixed catalog; the only
+  user text in the script is the separator, single-quoted. settings.json is switched only when there is no status line
+  or on explicit `apply`; the replaced value is kept in the pm dir's `statusline.json` `previous` for restore. Files pm
+  replaces get a `.bak-<ts>` copy (a script without the `# pm-statusline` marker, settings.json).
+- **Home usage strip** (`server/home-strip.mjs`, `web/src/UsageStrip.jsx`): `GET /api/home-strip` is unguarded; `PUT` is `canLaunch`-guarded and validates segment ids (known, no dups, else 400). Prefs live in the pm dir's `home-strip.json`; `/api/usage` is unchanged.
+- **Claude config review** (`server/claude-config.mjs`, `web/src/ClaudeConfig.jsx` in Setup): `GET /api/claude-config` is `canLaunch`-guarded and read-only. `?id=` previews only inventory ids; realpath must stay inside `~/.claude` or `PM_ROOT` (escaping symlink 403, unknown/traversal 400/404). Secrets are redacted; env shows names only.
+
+- **One SSE stream for all tabs** (`onStream` in `web/src/api.js`, Web Lock leader + BroadcastChannel).
+  Never open an `EventSource` per component: a few tabs exhaust the browser's 6 connections per
+  origin and every request hangs.
+
 ## Conventions
 
 - **Docs move with the code.** Any behavior change updates, in the same change: the
-  matching `README.md` section, this file if an invariant changed, and tests.
+  matching `README.md` or `docs/guide.md` section, this file if an invariant changed, and tests.
 - UI: keep the existing token system in `web/src/app.css` (spacing/radius/shadow/ease
   variables, hover/active/focus-visible states with transitions, light + dark themes).
   New controls must look and feel like the existing ones.
+- **Appearance** (`web/src/appearance-core.mjs` pure, `Appearance.jsx` sheet, `appearance.css`, applied from `main.jsx`):
+  browser-only localStorage `pm.appearance`, non-defaults only. Never store it on the server.
 - **README stays skimmable**: pitch → features → quick start → how it works → config,
-  short sections and tables, no route/function dumps. Internals go here or in the rules file.
+  short sections and tables, no route/function dumps. Per-feature detail goes in `docs/guide.md`, internals here or in the rules file.
 - No comment noise; add one line only where the *why* is non-obvious.
 - **Never run a branch operation without asking first** — no `git checkout -b`/`switch`/
   `branch`/`stash`/`reset`/`rebase`/`merge`, even to "get off `main`". Work on whatever

@@ -182,7 +182,7 @@ export async function restoreTask(slug, title) {
   const bl = (await readBacklog(slug)) || emptyBacklog(slug);
   if (bl.tasks.some((t) => t.title === title)) throw new Error("title already in backlog");
   const { priority, seq, note } = items[idx];
-  bl.tasks.push({ title, state: "Todo", priority, seq, note, done: null });
+  bl.tasks.unshift({ title, state: "Todo", priority, seq, note, done: null });
   await writeBacklog(slug, bl);
   const rest = items.filter((_, i) => i !== idx);
   const head = `# ${slug} — archive\nRemoved tasks; restore from the board.\n\n## Archived\n`;

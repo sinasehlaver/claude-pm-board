@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-port=$(node -e 'const s=require("net").createServer().listen(0,()=>{console.log(s.address().port);s.close()})')
+port=$(node -e 'const s=require("net").createServer().listen(0,()=>{process.stdout.write(String(s.address().port));s.close()})')
 fix=$(mktemp -d -t pm-verify)
 mkdir -p "$fix/.claude"/{state,rules,backlog,handoffs,pm}
 
@@ -72,6 +72,7 @@ Updated: 2026-09-09
 - some captured idea
 EOF
 echo '[{"project":"hub","date":"2026-09-07T18:00:00Z","kind":"commit","summary":"diet widgets","ref":"a1b2c3d"}]' > "$fix/.claude/pm/activity.json"
+echo '{"claudeBin":null}' > "$fix/.claude/pm/prefs.json"  # skip the first-run Setup redirect
 
 export PM_ROOT="$fix" PORT="$port" PM_LAUNCH_DRYRUN=1
 node server/index.mjs &
@@ -123,8 +124,8 @@ echo "--- build-with-claude (dryrun)"
 curl -sf -X POST "$B/api/projects/hub/tasks/0/launch" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||!/claude "\$\(cat /.test(d.cmd))process.exit(1);console.log("launch cmd:",d.cmd.slice(0,60),"…")'
 
 echo "--- run @seq orchestrator (dryrun; default = unattended relay, {unattended:false} = interactive)"
-curl -sf -X POST "$B/api/projects/hub/tasks/run-seq" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||d.count!==2||!d.relay||!/caffeinate -is node .*relay-cli\.mjs/.test(d.cmd))process.exit(1);console.log("run-seq relay count =",d.count,"| job:",d.job)'
-curl -sf -X POST "$B/api/projects/hub/tasks/run-seq" -H content-type:application/json -d '{"unattended":false}' | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||d.count!==2||d.relay||!/claude "\$\(cat /.test(d.cmd))process.exit(1);console.log("run-seq interactive count =",d.count,"| cmd:",d.cmd.slice(0,50),"…")'
+curl -sf -X POST "$B/api/projects/hub/tasks/run-seq" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||d.count!==3||!d.relay||!/caffeinate -is node .*relay-cli\.mjs/.test(d.cmd))process.exit(1);console.log("run-seq relay count =",d.count,"| job:",d.job)'
+curl -sf -X POST "$B/api/projects/hub/tasks/run-seq" -H content-type:application/json -d '{"unattended":false}' | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.ok||!d.dryrun||d.count!==3||d.relay||!/claude "\$\(cat /.test(d.cmd))process.exit(1);console.log("run-seq interactive count =",d.count,"| cmd:",d.cmd.slice(0,50),"…")'
 curl -sf "$B/api/relay" | jn 'const d=JSON.parse(require("fs").readFileSync(0));if(d.length!==1||d[0].status!=="waiting")process.exit(1);console.log("relay jobs listed =",d.length,"| status =",d[0].status)'
 
 echo "--- run-all fallback (no @seq flags -> every Todo/Doing; nothing runnable -> 400)"
@@ -144,7 +145,7 @@ echo "stale item -> 409"
 # the browser check needs a playwright launcher from the author's outer workspace; skipped without it
 if [ -f web/dist/index.html ] && [ -f web/verify.mjs ] && [ -f ../.claude/scripts/browser.mjs ]; then
   echo "--- browser check"
-  PM_URL="$B/" node web/verify.mjs
+  PM_URL="$B/" node "web/${PM_VERIFY_SCRIPT:-verify.mjs}"
 fi
 
 echo "verify OK"

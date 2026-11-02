@@ -32,7 +32,7 @@ test("latestTodos: newest file first, last-in-file first, open only, ideas exclu
   const l = await latestTodos();
   assert.deepEqual(
     l.map((t) => `${t.slug}:${t.title}`),
-    ["pm:pm second", "pm:pm first", "hub:hub second", "hub:hub first", "hub:hub doing"],
+    ["pm:pm first", "pm:pm second", "hub:hub doing", "hub:hub first", "hub:hub second"],
   );
   const s = l.find((t) => t.title === "hub second");
   assert.equal(s.note, "hub note");
@@ -110,7 +110,7 @@ const post = (p, body) =>
 test("GET /api/todos/latest returns the proxy-ordered list", async () => {
   const d = await (await fetch(B + "/api/todos/latest?limit=3")).json();
   assert.equal(d.length, 3);
-  assert.deepEqual(d.map((t) => t.title), ["pm second", "pm first", "hub second"]);
+  assert.deepEqual(d.map((t) => t.title), ["pm first", "pm second", "hub doing"]);
   assert.ok(["slug", "id", "title", "note", "seq", "priority"].every((k) => k in d[0]));
 });
 
@@ -146,7 +146,7 @@ test("POST /api/tasks/run-cross {unattended:false} launches one interactive root
   assert.equal(d.count, 2);
   assert.equal(d.projects, 2);
   assert.equal(d.skipped, 1);
-  assert.match(d.cmd, /cd '\/.*' && claude "\$\(cat '\/.*prompt\.txt'\)"/, d.cmd);
+  assert.match(d.cmd, /cd '\/.*' && (arch -arm64 )?claude "\$\(cat '\/.*prompt\.txt'\)"/, d.cmd);
   // the seed prompt was written to a file, ideas excluded from it
   const seedPath = d.cmd.match(/cat '([^']+)'/)[1];
   const prompt = readFileSync(seedPath, "utf8");

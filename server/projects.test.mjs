@@ -48,3 +48,11 @@ test("extractDescription takes the first prose paragraph after the H1", async ()
   assert.equal(extractDescription("# only heading\n"), "");
   assert.ok(extractDescription(`# t\n\n${"word ".repeat(100)}`).length <= 180);
 });
+
+test("parseRuleTitle rejects a mangled H1 so the slug is used", async () => {
+  const { parseRuleTitle } = await import("./projects.mjs");
+  assert.equal(parseRuleTitle("---\npaths: x\n---\n\n# plate/ — figures\n"), "plate/ — figures");
+  assert.equal(parseRuleTitle('# plate/ — for Mediucover:{kicker,title}`.'), null);
+  assert.equal(parseRuleTitle("# " + "x".repeat(81)), null);
+  assert.equal(parseRuleTitle("no heading"), null);
+});

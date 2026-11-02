@@ -167,13 +167,14 @@ test("launchClaude dryrun builds a resume command", async () => {
   const r = await launchClaude({ cwd: "/tmp", resumeId: "abcd-1234" });
   assert.equal(r.dryrun, true);
   // default provider is plain Claude Code: no OpenRouter env vars, no --model flag
-  assert.match(r.cmd, /^cd '\/tmp' && claude --resume 'abcd-1234'$/);
-  assert.ok(r.osa.includes(r.term === "iterm" ? "iTerm" : "Terminal"));
+  assert.match(r.cmd, /^cd '\/tmp' && (arch -arm64 )?claude --resume 'abcd-1234'$/);
+  assert.equal(r.term, "terminal");
+  assert.ok(r.osa.includes('tell application "Terminal"'));
 });
 
 test("launchClaude dryrun writes the prompt to a file, not the command line", async () => {
   const r = await launchClaude({ cwd: "/tmp", prompt: 'weird "quotes" and $(rm -rf /) here' });
-  assert.match(r.cmd, /^cd '\/tmp' && claude "\$\(cat '\/.*prompt\.txt'\)"$/);
+  assert.match(r.cmd, /^cd '\/tmp' && (arch -arm64 )?claude "\$\(cat '\/.*prompt\.txt'\)"$/);
   assert.doesNotMatch(r.cmd, /rm -rf/); // prompt text never on the command line
 });
 
@@ -282,4 +283,18 @@ test("build seeds and relay note carry the case-sensitive tool-name note", async
     seedForCrossProjectRun({ tasks }),
   ]) assert.ok(s.includes(TOOL_NOTE));
   assert.match(QUIET_NOTE, /never `bash`/);
+});
+
+test("model pref adds --model to the interactive launch and the relay spec; default adds nothing", async () => {
+  const { savePrefs } = await import("./setup.mjs");
+  const { launchClaude, launchRelay } = await import("./launch.mjs");
+  const { readFileSync } = await import("node:fs");
+  savePrefs({ model: "sonnet" });
+  const r = await launchClaude({ prompt: "hi" });
+  assert.match(r.cmd, /--model 'sonnet' "\$\(cat /);
+  const rr = await launchRelay({ prompt: "x", label: "l", tasks: [] });
+  const spec = JSON.parse(readFileSync(rr.cmd.match(/'([^']+\.spec\.json)'/)[1], "utf8"));
+  assert.equal(spec.modelArg, "sonnet");
+  savePrefs({ model: "default" });
+  assert.doesNotMatch((await launchClaude({ prompt: "hi" })).cmd, /--model/);
 });

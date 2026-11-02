@@ -52,12 +52,18 @@ async function hasDir(slug) {
   }
 }
 
+// H1 of the rules file, or null when it looks mangled (a bad edit once glued JSON onto it):
+// too long, or code-ish characters. Callers fall back to the slug.
+export function parseRuleTitle(md) {
+  const m = String(md || "").match(/^#\s+(.+?)\s*$/m);
+  if (!m) return null;
+  const t = m[1];
+  return t.length > 80 || /[`{}\[\]]/.test(t) ? null : t;
+}
+
 async function ruleTitle(slug) {
   try {
-    const m = (await readFile(join(RULES_DIR, `${slug}.md`), "utf8")).match(
-      /^#\s+(.+?)\s*$/m,
-    );
-    return m ? m[1] : null;
+    return parseRuleTitle(await readFile(join(RULES_DIR, `${slug}.md`), "utf8"));
   } catch {
     return null;
   }

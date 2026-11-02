@@ -59,7 +59,7 @@ test("add: optional note is written indented under the todo; 2-arg call still wo
   seed();
   await C.addTask("p", "plain");
   await C.addTask("p", "with note", "Done when: x\nTest: y");
-  assert.match(readFileSync(bl, "utf8"), /- plain\n- with note\n {2}Done when: x\n {2}Test: y\n/);
+  assert.match(readFileSync(bl, "utf8"), /- with note\n {2}Done when: x\n {2}Test: y\n- plain\n/);
 });
 
 test("state resume sets one Resume field and rejects unknown fields", async () => {
@@ -81,4 +81,19 @@ test("create: writes a new project's state+backlog once, refuses an existing slu
   await assert.rejects(C.createProject("newp", "s", "p", [], ["t"]), /already exists/);
   seed();
   await assert.rejects(C.createProject("p", "s", "p", [], ["t"]), /already exists/);
+});
+
+test("state next add/remove edits the Next list, dedupes, rejects bad input", async () => {
+  seed();
+  await C.editNext("p", "add", ["eyeball A", "eyeball B", "eyeball A"]);
+  await C.editNext("p", "add", ["eyeball B"]);
+  let s = readFileSync(st, "utf8");
+  assert.equal((s.match(/- eyeball A/g) || []).length, 1);
+  assert.equal((s.match(/- eyeball B/g) || []).length, 1);
+  await C.editNext("p", "remove", ["eyeball A"]);
+  assert.doesNotMatch(readFileSync(st, "utf8"), /eyeball A/);
+  await assert.rejects(C.editNext("p", "remove", ["nope"]), /no Next item/);
+  await assert.rejects(C.editNext("p", "add", ["a\nb"]), /single lines/);
+  await assert.rejects(C.editNext("../x", "add", ["a"]), /bad slug/);
+  assert.match(await C.main(["state", "p", "next", "add", "via main"]), /Next add ok/);
 });

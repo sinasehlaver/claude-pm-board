@@ -12,8 +12,8 @@ export const CROSS_EXCLUDED = new Set(["ideas"]);
 export const isOpen = (t) => t.state === "Todo" || t.state === "Doing";
 
 // The backlog format stores no created-at date, so "newest added" is a proxy:
-// backlog files ordered by mtime (newest first), tasks inside a file last-in-file
-// first (the add route appends to the end of Todo).
+// backlog files ordered by mtime (newest first), tasks inside a file first-in-file
+// first (new todos are added to the top of Todo).
 export async function latestTodos({ limit = 30 } = {}) {
   const cap = Math.max(1, Math.min(Number(limit) || 30, 200));
   const files = [];
@@ -30,7 +30,7 @@ export async function latestTodos({ limit = 30 } = {}) {
   for (const { slug } of files) {
     const bl = await readBacklog(slug);
     if (!bl) continue;
-    for (const t of bl.tasks.filter(isOpen).reverse()) {
+    for (const t of bl.tasks.filter(isOpen)) {
       out.push({
         slug,
         id: t.id,

@@ -47,6 +47,7 @@ writeFileSync(join(root, ".claude", "backlog", "hub.md"), "# hub — backlog\nUp
 
 process.env.PM_ROOT = root;
 const s = await import("./sessions.mjs");
+const { readBacklog } = await import("./backlog.mjs");
 
 test("readSessions applies guess when unfiled, split into inbox/filed", async () => {
   const { inbox, filed } = await s.listSessions();
@@ -76,7 +77,8 @@ test("sessionToTask appends a resume bullet and marks taskCreated", async () => 
 });
 
 test("moveTask relocates a bullet between backlog files", async () => {
-  await s.moveTask("hub", 0, "checker");
+  const hubBl = await readBacklog("hub");
+  await s.moveTask("hub", hubBl.tasks.find((t) => t.title === "existing").id, "checker");
   assert.doesNotMatch(readFileSync(join(root, ".claude", "backlog", "hub.md"), "utf8"), /- existing/);
   assert.match(readFileSync(join(root, ".claude", "backlog", "checker.md"), "utf8"), /- existing/);
   assert.ok(existsSync(join(root, ".claude", "backlog", "checker.md")));

@@ -1,17 +1,20 @@
-import { useEffect, useRef, useState } from "react";
-import { ago, get, send } from "./api";
+import { useRef, useState } from "react";
+import { ago, send } from "./api";
 import Help from "./Help.jsx";
 import LatestTodos from "./LatestTodos.jsx";
 import { RelayStrip } from "./relay.jsx";
+import { FillPanel, useFill } from "./fill.jsx";
 import { ColorPane, loadColor, saveColor, slugStyle, termBg } from "./projectColor.jsx";
 import { alertDialog, promptDialog } from "./dialog.jsx";
+import UsageStrip from "./UsageStrip.jsx";
+import AppearancePanel from "./Appearance.jsx";
 
-const usd = (n) => (n == null ? "—" : "$" + n.toFixed(2));
 
 export const HIDDEN_KEY = "pm.hiddenSlugs";
 const SORT_KEY = "pm.sort";
 const TAB_KEY = "pm.tab";
 const TOOLS_OPEN_KEY = "pm.toolsGroupOpen";
+const PROJECTS_OPEN_KEY = "pm.projectsOpen";
 const TABS = [["project", "Projects"], ["tool", "Tools"]];
 const STALE_DAYS = 7;
 
@@ -51,7 +54,8 @@ export function loadHidden() {
   }
 }
 
-export default function Home({ projects, inboxCount, selfSlug, onOpen, onSessions, onDoctor, onEnvs, onPorts, onChanges, reload }) {
+export default function Home({ projects, inboxCount, selfSlug, onOpen, onSessions, onDoctor, onSetup, onTour, setupBad, onEnvs, onPorts, onChanges, reload }) {
+  const [showAppearance, setShowAppearance] = useState(false);
   const [idea, setIdea] = useState("");
   const [ideaMsg, setIdeaMsg] = useState({});
   const ideaTimer = useRef(null);
@@ -60,16 +64,22 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   const [sort, setSort] = useState(() => loadPref(SORT_KEY, (v) => v in SORTS, "recent"));
   const [tab, setTab] = useState(() => loadPref(TAB_KEY, (v) => TABS.some(([k]) => k === v), "project"));
   const [toolsOpen, setToolsOpen] = useState(() => loadPref(TOOLS_OPEN_KEY, (v) => v === "1", "0") === "1");
+  const [projectsOpen, setProjectsOpen] = useState(() => loadPref(PROJECTS_OPEN_KEY, (v) => v === "0", "1") === "1");
   const [hidden, setHidden] = useState(loadHidden);
   const [showFilter, setShowFilter] = useState(false);
-  const [burn, setBurn] = useState(null);
+  const [fill, reloadFill, setFill] = useFill();
+  const autoProjects = new Set(fill?.autoProjects || []);
+  const autoCount = fill?.queuedBySlug || {};
 
-  useEffect(() => {
-    const load = () => get("/usage").then(setBurn).catch(() => {});
-    load();
-    const id = setInterval(load, 60_000);
-    return () => clearInterval(id);
-  }, []);
+  async function toggleAutoProject(slug, on) {
+    setFill((f) => f && { ...f, autoProjects: on ? [...(f.autoProjects || []), slug] : (f.autoProjects || []).filter((s) => s !== slug) });
+    try {
+      await send("PUT", "/fill/auto-project", { slug, on });
+    } catch (e) {
+      alertDialog(`Couldn't change auto project: ${e.message || e}`);
+    }
+    reloadFill();
+  }
 
   function toggleHidden(slug) {
     setHidden((prev) => {
@@ -122,6 +132,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   const changeTab = (v) => (setTab(v), savePref(TAB_KEY, v));
   const changeSort = (v) => (setSort(v), savePref(SORT_KEY, v));
   const toggleTools = () => (setToolsOpen(!toolsOpen), savePref(TOOLS_OPEN_KEY, toolsOpen ? "0" : "1"));
+  const toggleProjects = () => (setProjectsOpen(!projectsOpen), savePref(PROJECTS_OPEN_KEY, projectsOpen ? "0" : "1"));
 
   // Projects tab = projects, plus a collapsible group for tool entries (entries.json).
   // Tools tab = in-app tools (Env Manager). The self project (PM_SELF_SLUG) lives in the side pane.
@@ -134,7 +145,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
   const match = (p) =>
     p.pinned ||
     (!hidden.includes(p.slug) &&
-      (!q || [p.slug, p.title, p.status, p.next, p.lastResult].some((t) => (t || "").toLowerCase().includes(q))));
+      (!q || [p.slug, p.title, p.status, p.next].some((t) => (t || "").toLowerCase().includes(q))));
   const visible = tab === "project" ? sorted.filter((p) => !p.pinned && (p.kind || "project") === "project" && match(p)) : [];
   const entries = tab === "project" ? sorted.filter((p) => (p.kind || "project") !== "project" && match(p)) : [];
 
@@ -208,12 +219,6 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
         </div>
         {p.description && <div className="desc clamp">{p.description}</div>}
         <div className="status clamp">{p.status || <em className="muted">no status</em>}</div>
-        {p.lastResult && (
-          <div className="card-line">
-            <span className="chip">last result</span>
-            <span className="card-line-text">{p.lastResult}</span>
-          </div>
-        )}
         {p.next && (
           <div className="card-line">
             <span className="chip chip-quiet">next</span>
@@ -225,6 +230,29 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
           <span className={stale ? "stale" : ""} title={stale ? `untouched for over ${STALE_DAYS} days` : undefined}>
             {ago(when)}
           </span>
+        {fill && !p.pinned && p.slug !== "ideas" && (() => {
+          const on = autoProjects.has(p.slug);
+          const n = autoCount[p.slug] || 0;
+          return (
+            <button
+              type="button"
+              className={"auto-btn card-auto" + (on ? " on" : n ? " part" : "")}
+              aria-pressed={on}
+              aria-label={`${on ? "Turn off" : "Turn on"} auto for the whole ${p.title} project`}
+              title={
+                on
+                  ? "Auto project: fill runs may work every open todo here while you're away (click to turn off)"
+                  : (n ? `${n} todo${n === 1 ? "" : "s"} marked auto. ` : "") + "Click to make the whole project auto: fill runs may work every open todo here, including ones added later"
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleAutoProject(p.slug, !on);
+              }}
+            >
+              auto{!on && n ? ` ${n}` : ""}
+            </button>
+          );
+        })()}
         </div>
       </li>
     );
@@ -232,6 +260,12 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
 
   return (
     <div className="screen home-screen">
+      <div className="theme-toggle-fixed hover-fixed add-fixed">
+        <button className="theme-toggle" onClick={addAdhoc} title="Add an ad-hoc project" aria-label="Add project">
+          +
+        </button>
+      </div>
+      {showAppearance && <AppearancePanel onClose={() => setShowAppearance(false)} />}
       <header className="bar">
         <nav className="tabs">
           {TABS.map(([k, label]) => (
@@ -242,7 +276,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
         </nav>
         <div className="bar-actions">
           <details className="help-menu">
-            <summary className="link">Help{inboxCount ? <span className="badge">{inboxCount}</span> : null}</summary>
+            <summary className="link">Help{inboxCount ? <span className="dot" title={`${inboxCount} unfiled session${inboxCount === 1 ? "" : "s"}`} aria-label="Needs attention" /> : null}</summary>
             <div className="help-menu-list">
               <button className="link" onClick={onSessions} title="Recent Claude Code conversations: unfiled inbox vs linked to a project">
                 Sessions{inboxCount ? <span className="badge">{inboxCount}</span> : null}
@@ -250,13 +284,27 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
               <button className="link" onClick={onDoctor} title="LLM-free scan of transcripts: where errors and token spend concentrate">
                 Doctor
               </button>
+              <button className="link" onClick={onSetup} title="Which claude pm launches, plus Rosetta / platform-package checks">
+                Setup{setupBad ? <span className="badge">{setupBad}</span> : null}
+              </button>
+              <button className="link" onClick={onTour} title="A short walkthrough of the board">
+                Tour
+              </button>
             </div>
           </details>
-          <button className="add" onClick={addAdhoc} title="add an ad-hoc project">
-            +
+          <button className="add gear" onClick={() => setShowAppearance(true)} title="Appearance: colours, font, density" aria-label="Appearance settings">
+            ⚙
           </button>
         </div>
       </header>
+
+      {setupBad > 0 && (
+        <p className="pad">
+          <button className="link" onClick={onSetup} style={{ color: "var(--bad)" }}>
+            ⚠ {setupBad} launch check{setupBad > 1 ? "s" : ""} failing: sessions may not start. Open Setup
+          </button>
+        </p>
+      )}
 
       {showFilter && (
         <FilterSheet
@@ -287,6 +335,28 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
         </div>
       </form>
 
+      {ideasProj && (
+        <button className="ideas-pill" onClick={() => onOpen(ideasProj.slug)} title="Your ideas inbox, always on top and never hidden by the filter">
+          <span>💡 {ideasProj.title}</span>
+          <span className="muted">{ideasProj.openCount} open</span>
+        </button>
+      )}
+
+      <UsageStrip />
+
+      <FillPanel fill={fill} load={reloadFill} setFill={setFill} onOpen={onOpen} />
+      <RelayStrip />
+
+      <div className={tab === "project" ? "projects-fold" : undefined}>
+      {tab === "project" && (
+        <button type="button" className="projects-head" aria-expanded={projectsOpen} onClick={toggleProjects}>
+          <span className={`chevron${projectsOpen ? " open" : ""}`}>▸</span>
+          Projects
+          {projects !== null && <span className="projects-count">({visible.length + entries.length})</span>}
+        </button>
+      )}
+      {(tab !== "project" || projectsOpen) && (
+      <>
       {tab === "project" && (
         <div className="find">
           <input
@@ -307,25 +377,6 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
             Filter{hidden.length ? <span className="badge">{hidden.length}</span> : null}
           </button>
         </div>
-      )}
-
-      {burn && (
-        <div className="burn-strip-row">
-          <div className="burn-strip" title="Estimated Claude Code spend, same math as the statusline: current 5h block, today (UTC), last 7 days">
-            <span>🔥 {usd(burn.block)} / 5h</span>
-            <span>{usd(burn.today)} today</span>
-            <span>{usd(burn.week)} / 7d</span>
-          </div>
-        </div>
-      )}
-
-      <RelayStrip />
-
-      {ideasProj && (
-        <button className="ideas-pill" onClick={() => onOpen(ideasProj.slug)} title="Your ideas inbox, always on top and never hidden by the filter">
-          <span>💡 {ideasProj.title}</span>
-          <span className="muted">{ideasProj.openCount} open</span>
-        </button>
       )}
 
       {projects === null ? (
@@ -375,8 +426,11 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
           )}
         </ul>
       )}
+      </>
+      )}
+      </div>
 
-      {projects !== null && <LatestTodos projects={projects} reload={reload} hidden={hidden} />}
+      {projects !== null && <LatestTodos projects={projects} reload={reload} hidden={hidden} fill={fill} reloadFill={reloadFill} />}
     </div>
   );
 }

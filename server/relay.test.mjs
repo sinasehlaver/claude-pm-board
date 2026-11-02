@@ -168,6 +168,9 @@ if (!resume && process.env.FAKE_MODE === "reject") {
 if (!resume && process.env.FAKE_MODE === "soft") {
   out({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", rateLimitType: "five_hour", resetsAt: soon, unifiedWindows: { five_hour: { utilization: 0.97, resetsAt: soon } } }, session_id: sid });
   setInterval(() => {}, 1000); // hang until the relay stops us
+} else if (process.env.FAKE_MODE === "fill") {
+  out({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day", resetsAt: soon, unifiedWindows: { seven_day: { utilization: 0.5, resetsAt: soon + 86400 } } }, session_id: sid });
+  setInterval(() => {}, 1000);
 } else {
   const p = process.env.FAKE_BACKLOG;
   writeFileSync(p, readFileSync(p, "utf8").replace("## Todo\\n- ship it", "## Done\\n- ship it  (2026-09-20)"));
@@ -179,7 +182,7 @@ if (!resume && process.env.FAKE_MODE === "soft") {
   return bin;
 }
 
-async function e2e(mode, prompt = "original prompt") {
+async function e2e(mode, prompt = "original prompt", extra = {}) {
   const dir = mkdtempSync(join(root, "e2e-"));
   const backlog = join(root, ".claude/backlog/e2e.md");
   writeFileSync(backlog, "# e2e — backlog\nUpdated: 2026-09-20\n\n## Todo\n- ship it\n");
@@ -187,7 +190,7 @@ async function e2e(mode, prompt = "original prompt") {
   const log = join(dir, "calls.jsonl");
   writeFileSync(log, "");
   const specPath = join(dir, "spec.json");
-  writeFileSync(specPath, JSON.stringify({ id: `e2e-${mode}`, label: "e2e", root, cwd: root, prompt, tasks: [{ slug: "e2e", title: "ship it" }] }));
+  writeFileSync(specPath, JSON.stringify({ id: `e2e-${mode}`, label: "e2e", root, cwd: root, prompt, tasks: [{ slug: "e2e", title: "ship it" }], ...extra }));
   const t0 = Date.now();
   // the fake claude inherits process.env, exactly like the real one would
   Object.assign(process.env, {
@@ -232,6 +235,14 @@ test("e2e: utilization past the soft threshold stops the child and waits instead
   assert.equal(job.status, "done");
   assert.equal(calls.length, 2);
   assert.ok(job.events.some((e) => /utilization 97%/.test(e.msg)));
+});
+
+test("e2e: a fill job stops at its weekly target, finishes 'filled' and records the limits", async () => {
+  const { job, calls } = await e2e("fill", "original prompt", { fill: { stop7d: 0.4 } });
+  assert.equal(job.status, "filled");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(job.fill, { stop7d: 0.4 });
+  assert.equal(JSON.parse(readFileSync(R.limitsPath(root), "utf8")).week.pct, 50);
 });
 
 test("listRelayJobs: newest first; a live-looking job with a dead pid is reported dead", () => {

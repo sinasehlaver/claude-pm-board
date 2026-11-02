@@ -8,7 +8,7 @@ import { KINDS, entryDir } from "./entries.mjs";
 import { readState, writeState } from "./state.mjs";
 import { readBacklog, writeBacklog, emptyBacklog, runnableTasks, readArchive, restoreTask } from "./backlog.mjs";
 import { listSessions, fileSession, sessionToTask, sessionToNewProject, moveTask } from "./sessions.mjs";
-import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForDoctorFinding, seedForDoctorFindings, launchClaude, launchRelay, launchCommand } from "./launch.mjs";
+import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForCompactDone, seedForDoctorFinding, seedForDoctorFindings, launchClaude, launchRelay, launchCommand } from "./launch.mjs";
 import { listRelayJobs, relayDir, dismissRelay } from "./relay.mjs";
 import { latestTodos, resolveCrossItems } from "./todos.mjs";
 import { taskTokens } from "./tokens.mjs";
@@ -20,6 +20,11 @@ import * as changes from "./changes.mjs";
 import { resolveHost, tokenMatches } from "./bind.mjs";
 import { readDoctor, scanAndCache, startDoctorTimer, withStatuses, setStatus, verifyFinding, FINDING_STATUSES, NOTE_MAX } from "./doctor.mjs";
 import { statuslineUsageCached } from "./statusline-usage.mjs";
+import { homeStrip, writePrefs as writeStripPrefs } from "./home-strip.mjs";
+import { setupStatus, savePrefs } from "./setup.mjs";
+import { claudeConfig, previewFile } from "./claude-config.mjs";
+import { statuslineStatus, saveStatusline, restoreStatusline } from "./statusline.mjs";
+import { fillStatus, runFill, writeFillSettings, setAuto, setAutoProject } from "./fill.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4500;
@@ -52,6 +57,36 @@ app.get("/api/health", async (_req, res, next) => {
     next(e);
   }
 });
+
+// --- setup: which claude to launch + environment checks (Rosetta, platform package) ---
+app.get("/api/setup", (_req, res) => res.json(setupStatus()));
+app.put("/api/setup", (req, res) => {
+  if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
+  try {
+    const body = req.body || {};
+    const patch = {};
+    if ("claudeBin" in body) patch.claudeBin = typeof body.claudeBin === "string" ? body.claudeBin : null;
+    if ("model" in body) patch.model = body.model;
+    res.json(savePrefs(patch));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// --- status line builder: writes ~/.claude/statusline/statusline.sh (+ settings.json statusLine), so all guarded ---
+const guarded = (fn) => (req, res) => {
+  if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
+  try {
+    res.json(fn(req));
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
+};
+app.get("/api/statusline", guarded(() => statuslineStatus()));
+app.put("/api/statusline", guarded((req) => saveStatusline(req.body)));
+app.post("/api/statusline/restore", guarded(() => restoreStatusline()));
+// read-only Claude config review; ?id= previews one inventory file (id from the list, never a path)
+app.get("/api/claude-config", guarded((req) => (req.query.id ? previewFile(String(req.query.id)) : claudeConfig())));
 
 // listening ports per project (cwd under PM_ROOT), cached so the 30s refetches don't spawn lsof each time
 let runCache = { at: 0, map: new Map() };
@@ -142,7 +177,7 @@ app.post("/api/projects/:slug/tasks", async (req, res, next) => {
     const { title, state = "Todo", priority = null, note = null } = req.body || {};
     if (!title || !String(title).trim())
       return res.status(400).json({ error: "title required" });
-    bl.tasks.push({ title: String(title).trim(), state, priority, note });
+    bl.tasks.unshift({ title: String(title).trim(), state, priority, note });
     await writeBacklog(slug, bl);
     res.status(201).json(await getProject(slug));
   } catch (e) {
@@ -326,6 +361,19 @@ app.post("/api/projects/:slug/security-audit", async (req, res, next) => {
   }
 });
 
+// Compact Done: interactive session running pm's compact-done skill (proposes, then applies via backlog-cli).
+app.post("/api/projects/:slug/compact-done", async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    if (!SLUG_RE.test(slug) || slug === "ideas") return res.status(400).json({ error: "bad slug" });
+    if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
+    if (!(await readBacklog(slug))) return res.status(404).json({ error: "no backlog" });
+    res.json({ ok: true, ...(await launchClaude({ cwd: PM_ROOT, prompt: seedForCompactDone({ slug }), bg: req.body?.bg })) });
+  } catch (e) {
+    next(e);
+  }
+});
+
 // Launch one orchestrator session over the ticked todos (body `titles`, exact-title,
 // unknown => 409), or over every Todo/Doing task when none (see runnableTasks).
 // Same guard + launchClaude path as the single-task build button; pm doesn't
@@ -429,6 +477,57 @@ app.post("/api/tasks/move", async (req, res, next) => {
   }
 });
 
+// --- fill: spend unused weekly quota on todos marked auto (server/fill.mjs) ---
+const publicFill = ({ _todos, _stop7d, ...s }) => s;
+app.get("/api/fill", async (_req, res, next) => {
+  try {
+    res.json(publicFill(await fillStatus()));
+  } catch (e) {
+    next(e);
+  }
+});
+app.put("/api/fill/settings", (req, res) => {
+  if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
+  try {
+    res.json(writeFillSettings(req.body || {}));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.put("/api/fill/auto", (req, res) => {
+  if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
+  const { slug, title, on } = req.body || {};
+  if (typeof on !== "boolean") return res.status(400).json({ error: "on must be true/false" });
+  try {
+    res.json(setAuto(slug, title, on));
+    ping();
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.put("/api/fill/auto-project", (req, res) => {
+  if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
+  const { slug, on } = req.body || {};
+  if (typeof on !== "boolean") return res.status(400).json({ error: "on must be true/false" });
+  try {
+    res.json(setAutoProject(slug, on));
+    ping();
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+app.post("/api/fill/run", async (req, res, next) => {
+  if (!canLaunch(req)) return res.status(403).json({ error: "launch needs loopback or PM_TOKEN" });
+  try {
+    const r = await runFill({ manual: true });
+    if (r.pending) return res.status(202).json({ pending: true, why: r.status.decision.why, status: r.status }) && ping();
+    if (!r.launched) return res.status(409).json({ error: r.status.decision.why, status: r.status });
+    res.json(r);
+  } catch (e) {
+    next(e);
+  }
+});
+
 // --- usage: the statusline's USD numbers (5h block / today / 7d) ---------
 app.get("/api/usage", (_req, res, next) => {
   try {
@@ -437,6 +536,15 @@ app.get("/api/usage", (_req, res, next) => {
     next(e);
   }
 });
+
+app.get("/api/home-strip", (_req, res, next) => {
+  try {
+    res.json(homeStrip());
+  } catch (e) {
+    next(e);
+  }
+});
+app.put("/api/home-strip", guarded((req) => (writeStripPrefs(req.body), homeStrip())));
 
 // --- doctor: LLM-free efficiency scan of transcripts (suggestions only) ---
 app.get("/api/doctor", (_req, res) => {
@@ -631,6 +739,16 @@ harvest();
 // warm the per-file usage cache off the request path so the first /api/usage isn't a ~800ms cold scan
 setTimeout(() => { try { statuslineUsageCached(); } catch {} }, 0).unref();
 setInterval(harvest, 10 * 60 * 1000).unref();
+
+// --- fill timer: launches only when Settings has fill enabled ------------
+const FILL_MIN = Number(process.env.PM_FILL_INTERVAL_MIN ?? 5);
+if (FILL_MIN > 0)
+  setInterval(() => {
+    runFill().then(
+      (r) => r.launched && (console.log(`[fill] started job ${r.job} (${r.status.decision.why})`), ping()),
+      (err) => console.error("[fill]", err.message),
+    );
+  }, FILL_MIN * 60 * 1000).unref();
 
 // --- static SPA (built) ------------------------------------------------
 const DIST = join(__dirname, "../web/dist");

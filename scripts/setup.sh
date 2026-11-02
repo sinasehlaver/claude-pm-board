@@ -45,7 +45,7 @@ fi
 
 step "Terminal"
 echo "  windows pm launches get the project tint, or black (#000000) when no project color applies; your terminal profiles are not modified"
-echo "  truecolor:${COLORTERM:-not set in this shell} (iTerm2 and Terminal.app handle it; see README, Terminal colors)"
+echo "  sessions open in Terminal.app; the board's first-run Setup screen checks arm64/Rosetta and picks which claude to launch"
 
 [ "$start" = 1 ] || { echo; echo "done. start with: scripts/start.sh"; exit 0; }
 

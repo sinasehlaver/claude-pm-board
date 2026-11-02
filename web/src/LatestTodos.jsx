@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { get, onStream, send } from "./api";
+import ModelPick from "./ModelPick.jsx";
 import Help from "./Help.jsx";
 import TokBadge, { useTaskTokens } from "./TokBadge.jsx";
 import { UnattendedToggle, launchNotice, loadUnattended } from "./relay.jsx";
 import { alertDialog } from "./dialog.jsx";
+import { AutoToggle, toggleAuto } from "./fill.jsx";
 
 const PROJECT_KEY = "pm.addTodoProject";
 const LATEST_OPEN_KEY = "pm.latestTodosOpen";
@@ -14,13 +16,14 @@ const keyOf = (t) => `${t.slug}\u0000${t.title}`;
 
 // Home panel: add a todo to any project + the most recently added open todos
 // across all projects (newest first), selectable for one cross-project run.
-export default function LatestTodos({ projects, reload, hidden = [] }) {
+export default function LatestTodos({ projects, reload, hidden = [], fill, reloadFill }) {
   const [todos, setTodos] = useState(null);
   const tokens = useTaskTokens(todos);
   const [picked, setPicked] = useState(() => new Set());
   const [title, setTitle] = useState("");
   const [slug, setSlug] = useState(() => localStorage.getItem(PROJECT_KEY) || "");
   const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [unattended, setUnattended] = useState(loadUnattended);
   const [notice, setNotice] = useState("");
   const [open, setOpen] = useState(() => {
@@ -82,16 +85,19 @@ export default function LatestTodos({ projects, reload, hidden = [] }) {
     e.preventDefault();
     if (!title.trim() || !target || busy) return;
     setBusy(true);
+    setAdding(true);
     try {
       await send("POST", `/projects/${target}/tasks`, { title: title.trim() });
       setTitle("");
       localStorage.setItem(PROJECT_KEY, target);
-      await load();
+      setAdding(false);
+      load();
       reload();
     } catch (err) {
       alertDialog(err.message);
     } finally {
       setBusy(false);
+      setAdding(false);
     }
   }
 
@@ -183,7 +189,7 @@ export default function LatestTodos({ projects, reload, hidden = [] }) {
               ))}
             </select>
             <button className="lt-btn" type="submit" disabled={!title.trim() || !target || busy}>
-              Add
+              {adding ? "Adding…" : "Add"}
             </button>
           </form>
 
@@ -204,6 +210,20 @@ export default function LatestTodos({ projects, reload, hidden = [] }) {
                           {t.state === "Doing" && <span className="lt-state">doing</span>}
                           {t.priority ? <span className={`lt-pri p${t.priority}`}>p{t.priority}</span> : null}
                           <TokBadge rec={tokens[t.slug]?.[t.title]} />
+                          {fill && (() => {
+                            const viaProject = !!fill.autoProjects?.includes(t.slug);
+                            const marked = !!fill.auto?.[t.slug]?.includes(t.title);
+                            return (
+                              <span onClick={(e) => e.preventDefault()}>
+                                <AutoToggle
+                                  on={viaProject || marked}
+                                  viaProject={viaProject}
+                                  title={t.title}
+                                  onToggle={() => toggleAuto(t.slug, t.title, !marked, reloadFill)}
+                                />
+                              </span>
+                            );
+                          })()}
                         </span>
                       </span>
                     </label>
@@ -217,6 +237,7 @@ export default function LatestTodos({ projects, reload, hidden = [] }) {
 
           <div className="lt-run">
             <UnattendedToggle value={unattended} onChange={setUnattended} />
+            <ModelPick />
             <span className="bar-item">
               <button className="lt-btn lt-run-btn" onClick={run} disabled={!runList.length || busy}>
                 {allMode ? `▶▶ Run all listed (${runList.length})` : `▶▶ Run selected (${chosen.length})`}

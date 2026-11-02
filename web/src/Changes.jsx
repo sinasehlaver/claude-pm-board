@@ -6,7 +6,7 @@ import { FilterSheet, HIDDEN_KEY, loadHidden } from "./Home.jsx";
 const q = (o) => new URLSearchParams(o).toString();
 
 // Pair a hunk's -/+ runs into left (old) / right (new) rows for the side-by-side view.
-export function sideRows(lines) {
+function sideRows(lines) {
   const rows = [];
   let del = [];
   let add = [];

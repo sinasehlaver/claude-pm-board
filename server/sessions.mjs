@@ -63,7 +63,7 @@ export async function sessionToTask(id, project) {
   if (!sess) throw new Error("no such session");
   const bl = (await readBacklog(project)) || emptyBacklog(project);
   const snippet = (sess.firstAsk || sess.title || "").replace(/\s+/g, " ").trim().slice(0, 140);
-  bl.tasks.push({
+  bl.tasks.unshift({
     state: "Todo",
     title: `resume: ${sess.title}`.slice(0, 120),
     priority: null,
@@ -92,7 +92,7 @@ export async function moveTask(fromSlug, id, toSlug) {
   if (!t) throw new Error("no such task");
   from.tasks = from.tasks.filter((x) => x.id !== Number(id));
   const to = (await readBacklog(toSlug)) || emptyBacklog(toSlug);
-  to.tasks.push({
+  to.tasks.unshift({
     state: "Todo",
     title: t.title,
     priority: t.priority ?? null,

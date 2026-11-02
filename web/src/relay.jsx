@@ -39,6 +39,7 @@ const STATUS_LABEL = {
   running: "running",
   waiting: "waiting",
   done: "done",
+  filled: "filled",
   stalled: "stalled",
   failed: "failed",
   stopped: "stopped",

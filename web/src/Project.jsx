@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
 import { ago, get, send } from "./api";
+import ModelPick from "./ModelPick.jsx";
 import Help from "./Help.jsx";
 import PathText, { FileLink } from "./PathText.jsx";
 import TokBadge, { useTaskTokens } from "./TokBadge.jsx";
 import { UnattendedToggle, loadUnattended } from "./relay.jsx";
+import { AutoToggle, AutoProjectToggle, toggleAuto, useFill } from "./fill.jsx";
 import { ColorPane, slugStyle, loadColor, saveColor, termBg } from "./projectColor.jsx";
 import { alertDialog, promptDialog } from "./dialog.jsx";
 
 const STATES = ["Doing", "Todo", "Blocked", "Done"];
 const KIND = { commit: "●", handoff: "⇄", plan: "▤" };
 const EMPTY_RESUME = { lastResult: "", rerun: "", branch: "", artifacts: "" };
+// Done items before this date can be compacted (server: compact.mjs KEEP_DAYS = 7).
+const compactCutoff = () => new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
 
 export default function Project({ slug, data, projects, onBack, reload }) {
   const [editing, setEditing] = useState(false);
@@ -20,6 +24,9 @@ export default function Project({ slug, data, projects, onBack, reload }) {
   const [color, setColor] = useState(() => loadColor(slug));
   const [picked, setPicked] = useState(() => new Set());
   const tokens = useTaskTokens(data);
+  const [fill, reloadFill] = useFill();
+  const autoSet = new Set(fill?.auto?.[slug] || []);
+  const autoProject = !!fill?.autoProjects?.includes(slug);
 
   if (!data)
     return (
@@ -38,8 +45,10 @@ export default function Project({ slug, data, projects, onBack, reload }) {
     try {
       await fn();
       reload();
+      return true;
     } catch (e) {
       alertDialog(e.message);
+      return false;
     }
   };
   const patchState = (patch) =>
@@ -73,6 +82,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
       setPicked(new Set());
     });
   const securityAudit = () => act(() => send("POST", `/projects/${slug}/security-audit`, { bg: termBg(slug, color) }));
+  const compactDone = () => act(() => send("POST", `/projects/${slug}/compact-done`, { bg: termBg(slug, color) }));
   const moveTask = async (id) => {
     const to = await promptDialog({ title: "Move task", label: "Move to which project?", options: moveTargets, confirmLabel: "Move" });
     if (to && moveTargets.includes(to))
@@ -164,6 +174,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
           </span>
           <span className="bar-item">
             <UnattendedToggle value={unattended} onChange={setUnattended} />
+            {!isIdeas && fill && <AutoProjectToggle slug={slug} on={autoProject} reload={reloadFill} />}
             {openTitles.length > 1 && (
               <button
                 className="link"
@@ -181,6 +192,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
             >
               {`▶▶ Run ${runMode === "selected" ? "selected" : "all"} (${runCount})`}
             </button>
+            <ModelPick />
             <Help text="Launches one Claude Code session that works through your tasks. Tick the boxes on the left of open tasks to run only those; with none ticked it runs every Todo and Doing task (Blocked and Done are skipped). The label shows which mode you're in." />
           </span>
         </div>
@@ -217,6 +229,19 @@ export default function Project({ slug, data, projects, onBack, reload }) {
                         : "Tasks waiting on something, tucked away by default. Click here to show or hide them."
                     }
                   />
+                  {st === "Done" && rows.some((t) => !t.done || t.done < compactCutoff()) && (
+                    <button
+                      className="link"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        compactDone();
+                      }}
+                      onKeyDown={(e) => e.stopPropagation()}
+                      title="Opens a Claude session that merges Done items older than 7 days into fewer, shorter ones. It shows you the proposal first; originals go to Archived."
+                    >
+                      Compact
+                    </button>
+                  )}
                 </h3>
               ) : (
                 <h3>{st}</h3>
@@ -229,6 +254,11 @@ export default function Project({ slug, data, projects, onBack, reload }) {
                     slug={slug}
                     rec={tokens[slug]?.[t.title]}
                     pick={t.state === "Todo" || t.state === "Doing" ? { on: picked.has(t.title), toggle: () => togglePick(t.title) } : null}
+                    auto={
+                      !isIdeas && fill && (t.state === "Todo" || t.state === "Doing")
+                        ? { on: autoProject || autoSet.has(t.title), viaProject: autoProject, toggle: () => toggleAuto(slug, t.title, !autoSet.has(t.title), reloadFill) }
+                        : null
+                    }
                     onEdit={editTask}
                     onDel={delTask}
                     onBuild={buildTask}
@@ -445,9 +475,9 @@ function ResumePanel({ slug, state, onContinue, onEdit }) {
   const okey = "pm.resumeOpen." + slug;
   const [open, setOpen] = useState(() => {
     try {
-      return localStorage.getItem(okey) !== "0";
+      return localStorage.getItem(okey) === "1";
     } catch {
-      return true;
+      return false;
     }
   });
   const toggle = () =>
@@ -613,24 +643,27 @@ function StatusForm({ state, onSave }) {
 
 function AddRow({ onAdd }) {
   const [v, setV] = useState("");
+  const [busy, setBusy] = useState(false);
   return (
     <form
       className="addrow"
-      onSubmit={(e) => {
+      aria-busy={busy}
+      onSubmit={async (e) => {
         e.preventDefault();
-        if (v.trim()) {
-          onAdd(v.trim());
-          setV("");
-        }
+        if (!v.trim() || busy) return;
+        setBusy(true);
+        // keep the text until the server confirms, so a failed add can be retried
+        if (await onAdd(v.trim())) setV("");
+        setBusy(false);
       }}
     >
-      <input placeholder="Add a task…" value={v} onChange={(e) => setV(e.target.value)} />
-      <button>Add</button>
+      <input placeholder="Add a task…" value={v} disabled={busy} onChange={(e) => setV(e.target.value)} />
+      <button disabled={busy}>{busy ? "Adding…" : "Add"}</button>
     </form>
   );
 }
 
-function Task({ t, slug, rec, pick, onEdit, onDel, onBuild, onMove }) {
+function Task({ t, slug, rec, pick, auto, onEdit, onDel, onBuild, onMove }) {
   return (
     <div className="task">
       <div className="task-main">
@@ -653,6 +686,7 @@ function Task({ t, slug, rec, pick, onEdit, onDel, onBuild, onMove }) {
           {t.title}
         </button>
         <TokBadge rec={rec} />
+        {auto && <AutoToggle on={auto.on} viaProject={auto.viaProject} onToggle={auto.toggle} title={t.title} />}
         <button className="build" title="build with Claude" onClick={() => onBuild(t.id)}>
           ▶
         </button>
