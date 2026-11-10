@@ -263,13 +263,36 @@ export default function App() {
     if (window.location.pathname !== path) window.history.pushState(null, "", path);
   }, [view, sel]);
 
+  // returning from a project: bring its Home card into view + brief highlight
+  const lastSel = useRef(null);
+  const focusSlug = useRef(null);
+  useEffect(() => {
+    if (sel) lastSel.current = sel;
+    else if (lastSel.current) {
+      focusSlug.current = lastSel.current;
+      lastSel.current = null;
+    }
+  }, [sel]);
+  useEffect(() => {
+    const slug = focusSlug.current;
+    if (!slug || sel || view !== "home") return;
+    const el = [...document.querySelectorAll(".cards .card[data-slug]")].find((e) => e.dataset.slug === slug);
+    if (!el) return;
+    focusSlug.current = null;
+    const r = el.getBoundingClientRect();
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (r.top < 0 || r.bottom > window.innerHeight) el.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+    el.classList.add("card-return");
+    setTimeout(() => el.classList.remove("card-return"), 1600);
+  }, [sel, view, projects]);
+
   const body = sel ? (
     <Project
       slug={sel}
       data={detail}
       projects={projects || []}
       onBack={() => setSel(null)}
-      reload={() => loadDetail(sel)}
+      reload={() => (loadList(), loadDetail(sel))}
     />
   ) : view === "sessions" ? (
     <Sessions
@@ -338,7 +361,7 @@ export default function App() {
       )}
       {selfSlug && pmOpen && (
         <aside className="pm-pane">
-          <Project slug={selfSlug} data={pmDetail} projects={projects || []} onBack={() => setPmOpen(false)} reload={loadPm} />
+          <Project slug={selfSlug} data={pmDetail} projects={projects || []} onBack={() => setPmOpen(false)} reload={() => (loadList(), loadPm())} />
         </aside>
       )}
     </>

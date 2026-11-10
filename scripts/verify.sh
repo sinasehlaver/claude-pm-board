@@ -23,6 +23,10 @@ sid="feedface-0000-1111-2222"
   echo '{"type":"assistant","timestamp":"2026-09-08T09:30:00Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
 } > "$sdir/$sid.jsonl"
 
+mkdir -p "$fix/hub"
+printf '#!/bin/sh\n' > "$fix/hub/start.sh"
+chmod +x "$fix/hub/start.sh"
+
 cat > "$fix/.claude/rules/hub.md" <<'EOF'
 # hub — rules
 EOF

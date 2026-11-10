@@ -77,10 +77,10 @@ export async function sessionToTask(id, project) {
 }
 
 // Scaffold a brand-new project, file the session to it, and seed a Todo from the session.
-export async function sessionToNewProject(id, name) {
+export async function sessionToNewProject(id, name, descriptor) {
   const sess = (await readJson(SESSIONS_FILE, [])).find((s) => s.id === id);
   if (!sess) throw new Error("no such session");
-  const slug = await scaffoldProject(name, { title: sess.title });
+  const slug = await scaffoldProject(name, { title: sess.title, descriptor });
   await sessionToTask(id, slug);
   return slug;
 }

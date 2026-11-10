@@ -165,7 +165,19 @@ if (!resume && process.env.FAKE_MODE === "reject") {
   out({ type: "result", subtype: "success", is_error: true, result: "You've hit your limit", session_id: sid });
   process.exit(1);
 }
-if (!resume && process.env.FAKE_MODE === "soft") {
+if (process.env.FAKE_MODE === "handoff") {
+  const n = readFileSync(process.env.FAKE_LOG, "utf8").trim().split("\\n").length;
+  if (n === 1) {
+    out({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", rateLimitType: "five_hour", resetsAt: soon, unifiedWindows: { five_hour: { utilization: 0.92, resetsAt: soon } } }, session_id: sid });
+    setInterval(() => {}, 1000);
+  } else if (n === 2) {
+    out({ type: "result", subtype: "success", is_error: false, result: "HANDOFF: half done, next step X", session_id: sid });
+  } else {
+    const p = process.env.FAKE_BACKLOG;
+    writeFileSync(p, readFileSync(p, "utf8").replace("## Todo\\n- ship it", "## Done\\n- ship it  (2026-09-20)"));
+    out({ type: "result", subtype: "success", is_error: false, result: "done", session_id: sid });
+  }
+} else if (!resume && process.env.FAKE_MODE === "soft") {
   out({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", rateLimitType: "five_hour", resetsAt: soon, unifiedWindows: { five_hour: { utilization: 0.97, resetsAt: soon } } }, session_id: sid });
   setInterval(() => {}, 1000); // hang until the relay stops us
 } else if (process.env.FAKE_MODE === "fill") {
@@ -235,6 +247,41 @@ test("e2e: utilization past the soft threshold stops the child and waits instead
   assert.equal(job.status, "done");
   assert.equal(calls.length, 2);
   assert.ok(job.events.some((e) => /utilization 97%/.test(e.msg)));
+});
+
+test("handoffStop: lower threshold than softStop, off when disabled", () => {
+  const cfg = R.relayConfig({});
+  const st = R.emptyRun();
+  R.foldEvent(st, rl("allowed", "five_hour", 2000, { five_hour: { utilization: 0.91, resetsAt: 2000 } }));
+  assert.equal(R.softStop(st, cfg, 1000), null);
+  assert.equal(R.handoffStop(st, cfg, 1000).type, "five_hour");
+  assert.equal(R.handoffStop(st, { ...cfg, handoff: false }, 1000), null);
+  assert.equal(R.handoffStop(st, cfg, 3_000_000), null);
+});
+
+test("handoff prompts: mechanical fallback + fresh prompt carry brief, handoff and open todos", () => {
+  const open = [{ slug: "a", title: "do x" }];
+  const m = R.mechanicalHandoff({ open, lastText: "was editing foo", why: "limit already rejected" });
+  assert.match(m, /- \[a\] do x/);
+  assert.match(m, /was editing foo/);
+  const f = R.freshPrompt({ brief: "BRIEF", handoff: "HAND", open });
+  assert.ok(f.startsWith("BRIEF") && f.includes("HAND") && f.includes("- [a] do x"));
+  assert.match(R.handoffPrompt({ open }), /HANDOFF only/);
+});
+
+test("e2e: near the limit -> handoff turn -> wait -> FRESH session (no --resume) seeded from the handoff", async () => {
+  const { job, calls, jobFile } = await e2e("handoff");
+  assert.equal(job.status, "done");
+  assert.equal(calls.length, 3);
+  assert.ok(!calls[0].args.includes("--resume"));
+  assert.deepEqual(calls[1].args.slice(calls[1].args.indexOf("--resume")), ["--resume", "sess-1234"]);
+  assert.match(calls[1].prompt, /HANDOFF only/);
+  assert.ok(!calls[2].args.includes("--resume"));
+  assert.ok(calls[2].prompt.startsWith("original prompt"));
+  assert.match(calls[2].prompt, /HANDOFF: half done, next step X/);
+  assert.match(calls[2].prompt, /- \[e2e\] ship it/);
+  assert.equal(jobFile.mode, "fresh");
+  assert.equal(readFileSync(jobFile.handoff, "utf8").trim(), "HANDOFF: half done, next step X");
 });
 
 test("e2e: a fill job stops at its weekly target, finishes 'filled' and records the limits", async () => {

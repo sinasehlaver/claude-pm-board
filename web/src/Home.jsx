@@ -4,7 +4,8 @@ import Help from "./Help.jsx";
 import LatestTodos from "./LatestTodos.jsx";
 import { RelayStrip } from "./relay.jsx";
 import { FillPanel, useFill } from "./fill.jsx";
-import { ColorPane, loadColor, saveColor, slugStyle, termBg } from "./projectColor.jsx";
+import { ColorPane, loadColor, saveColor, slugStyle } from "./projectColor.jsx";
+import StartButton from "./StartButton.jsx";
 import { alertDialog, promptDialog } from "./dialog.jsx";
 import UsageStrip from "./UsageStrip.jsx";
 import AppearancePanel from "./Appearance.jsx";
@@ -93,8 +94,10 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
     const raw = await promptDialog({ title: "New ad-hoc item", label: "Short slug (a-z, 0-9, -)", confirmLabel: "Create" });
     if (!raw) return;
     const slug = raw.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+    const descriptor = await promptDialog({ title: "What is it?", label: "A few words, max 40 characters", placeholder: "band merch demand tracker", confirmLabel: "Create" });
+    if (!descriptor) return;
     try {
-      await send("POST", "/projects", { slug });
+      await send("POST", "/projects", { slug, descriptor });
       reload();
       onOpen(slug);
     } catch (e) {
@@ -155,6 +158,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
     return (
       <li
         key={p.slug}
+        data-slug={p.slug}
         className={"card pc has-pc" + (p.blocked ? " is-blocked" : "")}
         style={slugStyle(p.slug, loadColor(p.slug))}
         onClick={() => onOpen(p.slug)}
@@ -174,48 +178,16 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
                 />
               </span>
             )}
-            {p.pinned ? "💡 " : ""}
-            {p.title}
+            <span className="title-text" title={p.title}>
+              {p.pinned ? "💡 " : ""}
+              {p.title}
+            </span>
             {p.adhoc && <span className="tag">ad-hoc</span>}
             {p.pinned && (
               <Help text="Your always-on-top ideas inbox — a catch-all backlog for anything not tied to a specific project yet. Never hidden by the filter." />
             )}
           </span>
-          {p.hasStart && (
-            <span className="start-wrap">
-            <button
-              className={"start-btn" + (p.running?.length ? " is-running" : "")}
-              title={p.running?.length ? "Running — click to stop it" : "Run ./start.sh in a terminal"}
-              aria-label={`${p.running?.length ? "Stop" : "Start"} ${p.title}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                const req = p.running?.length
-                  ? send("POST", `/projects/${p.slug}/stop`).then(() => (reload(), setTimeout(reload, 1500)))
-                  : send("POST", `/projects/${p.slug}/start`, { bg: termBg(p.slug, loadColor(p.slug)) });
-                req.catch((err) => alertDialog(err.message));
-              }}
-            >
-              <span className="start-ico">{p.running?.length ? "■" : "▶"}</span>
-              <span className="start-txt">
-                <b>{p.running?.length ? "Stop" : "Start"}</b>
-                <small>{p.running?.length ? p.running.slice(0, 3).map((r) => ":" + r.port).join(" ") : "./start.sh"}</small>
-              </span>
-            </button>
-              {p.running?.length > 0 && (
-                <a
-                  className="app-open-btn"
-                  href={`http://127.0.0.1:${p.running[0].port}`}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  title={`Open http://127.0.0.1:${p.running[0].port} in a new tab`}
-                  aria-label={`Open ${p.title} app`}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  ↗
-                </a>
-              )}
-            </span>
-          )}
+          <StartButton p={p} reload={reload} />
         </div>
         {p.description && <div className="desc clamp">{p.description}</div>}
         <div className="status clamp">{p.status || <em className="muted">no status</em>}</div>
@@ -230,7 +202,7 @@ export default function Home({ projects, inboxCount, selfSlug, onOpen, onSession
           <span className={stale ? "stale" : ""} title={stale ? `untouched for over ${STALE_DAYS} days` : undefined}>
             {ago(when)}
           </span>
-        {fill && !p.pinned && p.slug !== "ideas" && (() => {
+        {fill && (() => {
           const on = autoProjects.has(p.slug);
           const n = autoCount[p.slug] || 0;
           return (

@@ -37,12 +37,15 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
   `$PM_ROOT/.claude/backlog-archive/<slug>.md`, and snapshots the previous file to
   `backlog-archive/.snapshots/` (keep 20/slug). Don't write backlog files any other way.
   Unknown `##` sections are preserved, not dropped. `backlog-cli.mjs` stays add/move/list/create (+ `state now|resume|next`):
-  `create <slug> …` writes a NEW project's state+backlog (create-only, refuses an existing slug);
+  `create <slug> "<descriptor>" …` writes a NEW project's state+backlog+rules stub (create-only, refuses an existing slug);
   no delete/rename; `add` rejects duplicate exact titles; `move` is exact-title only.
   `compact <slug> candidates|apply <plan.json>` (`server/compact.mjs`) is the one rewording path: only
   Done items older than 7 days, all-or-nothing validation, written through `writeBacklog` so the
   originals are archived. Driven by `skills/compact-done/SKILL.md` (shipped + `asarUnpack`ed) via
   the launch-guarded `POST /api/projects/:slug/compact-done`.
+- **Every project is created with a descriptor** (`server/descriptor.mjs`): the rules-file H1 `# <slug>/ — <descriptor>`,
+  max 40 chars, is the card title. `POST /api/projects`, `POST /api/sessions/:id/new-project` and CLI `create` all require it
+  (400 / throw before anything is written). Existing rules files are never overwritten. `adhoc` = no project dir, nothing else.
 - **Task ids are positional**, shift after any write. Match by title when it must be stable.
 - **No LLM calls from pm.** It only seeds terminal Claude Code sessions (`server/launch.mjs`, Terminal.app only).
   The binary comes from `server/setup.mjs` (`pm/prefs.json`, user-owned; `PUT /api/setup` is launch-guarded and
@@ -64,7 +67,7 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
   unauthenticated by design (meant for a trusted LAN or loopback). `POST /api/projects/:slug/start`
   is one of them: it runs only the fixed `./start.sh` in the project dir, and only when `start.sh`
   is a regular file whose realpath stays inside that dir (`startScript` in `projects.mjs`).
-  `projects` payload carries `hasStart` for the Home ▶ start button.
+  List and single-project payloads carry `hasStart` + `running` for the shared `web/src/StartButton.jsx` (Home cards, project page).
 - **Run selected** (`POST …/tasks/run-seq`) takes optional `titles`: exact titles among Todo/Doing.
   Unknown → 409 `{unknown}`; malformed or over 200 → 400; empty/absent = all. `runnableTasks(tasks, titles)`
   is the single selector.
@@ -77,10 +80,16 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
   Relay args also carry `--strict-mcp-config --append-system-prompt QUIET_NOTE` (+ `TOOL_NOTE`), plus
   `--disable-slash-commands` unless the prompt mentions "skill"; relay and `launchClaude` add `--settings $PM_ROOT/.claude/settings.json` when it
   exists (a project-dir cwd doesn't load it otherwise).
+  **Handoff near a limit** (`server/relay.mjs`, `PM_RELAY_HANDOFF=0` off, `PM_RELAY_HANDOFF_5H` 0.90, `PM_RELAY_HANDOFF_7D` 0.95):
+  SIGINT, one short `--resume` turn asking for plain text, saved to `.claude/pm/relay/<id>.handoff.md` (mechanical
+  fallback from job state if rejected or empty). After the reset it starts a FRESH session (`freshPrompt`: brief +
+  handoff + open todos), never `--resume` (a resume after a 5h reset re-reads the whole context uncached). `job.json`
+  gains `handoff` and `mode:"fresh"`. The old stop + `--resume` path remains for plain rejection and when handoff is off.
+  Not live-tested against real claude.
 - **Fill** (`server/fill.mjs`): pm still reads no usage itself beyond rate-limit numbers Claude Code
   emits — relay runs write `.claude/pm/limits.json` (`saveLimits`), the user's statusline may write
   `~/.claude/rate-limits.json`. Only todos the user marked auto (`.claude/pm/auto-todos.json`, keyed by
-  title, user-owned; `ideas` refused) or open todos of an auto project (`auto-projects.json`, `[slug]`,
+  title, user-owned; `ideas` allowed too, run headless with bookkeeping only via `backlog-cli`) or open todos of an auto project (`auto-projects.json`, `[slug]`,
   re-read every pass) ever run; settings in `.claude/pm/fill.json`. Launches only via
   `launchRelayDetached` with `spec.fill.stop7d`; the relay ends such a job `filled`. All three write routes +
   `POST /api/fill/run` are `canLaunch`-guarded. The timer never launches while any relay job is live.
@@ -104,6 +113,7 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
   user text in the script is the separator, single-quoted. settings.json is switched only when there is no status line
   or on explicit `apply`; the replaced value is kept in the pm dir's `statusline.json` `previous` for restore. Files pm
   replaces get a `.bak-<ts>` copy (a script without the `# pm-statusline` marker, settings.json).
+- **Interactive limit hook** (`hooks/limit-handoff.mjs`, `server/limit-hook.mjs`, `web/src/LimitHook.jsx`, GET/PUT `/api/limit-hook`, `canLaunch`-guarded; PUT `{on:boolean}` else 400): UserPromptSubmit + PostToolUse read `~/.claude/rate-limits.json` (`PM_RATE_LIMITS_FILE`) and emit additionalContext once per session+window at the relay thresholds. It writes only its own `hooks` entries in `~/.claude/settings.json` (`PM_CLAUDE_DIR`), `.bak-<ts>` first; uninstall removes only entries naming `limit-handoff.mjs`. `hooks/**` is in package.json files + asarUnpack. Needs the statusline saving rate limits. Not browser-checked, not live-tested.
 - **Home usage strip** (`server/home-strip.mjs`, `web/src/UsageStrip.jsx`): `GET /api/home-strip` is unguarded; `PUT` is `canLaunch`-guarded and validates segment ids (known, no dups, else 400). Prefs live in the pm dir's `home-strip.json`; `/api/usage` is unchanged.
 - **Claude config review** (`server/claude-config.mjs`, `web/src/ClaudeConfig.jsx` in Setup): `GET /api/claude-config` is `canLaunch`-guarded and read-only. `?id=` previews only inventory ids; realpath must stay inside `~/.claude` or `PM_ROOT` (escaping symlink 403, unknown/traversal 400/404). Secrets are redacted; env shows names only.
 

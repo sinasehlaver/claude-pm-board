@@ -3,6 +3,14 @@ import { get, send } from "./api";
 
 export const MODELS = ["default", "opus", "sonnet", "haiku"];
 
+// Colour by token price (USD per 1M tokens, input/output; mirrors PRICING in server/statusline-usage.mjs).
+const TIERS = {
+  default: { tier: "default", price: "", tip: "Claude Code's own default model (price depends on it)" },
+  haiku: { tier: "cheap", price: "$", tip: "Cheapest: $0.50 in / $2.50 out per 1M tokens" },
+  sonnet: { tier: "mid", price: "$$", tip: "Mid price: $2 in / $10 out per 1M tokens" },
+  opus: { tier: "high", price: "$$$", tip: "Priciest here: $4 in / $20 out per 1M tokens" },
+};
+
 // Compact model selector: the pick lives in .claude/pm/prefs.json and applies to every launch.
 export default function ModelPick() {
   const [model, setModel] = useState("default");
@@ -20,15 +28,26 @@ export default function ModelPick() {
       setModel(prev);
     }
   };
+  const cur = TIERS[model];
   return (
     <span className="srow model-pick">
-      <select value={model} onChange={change} title="model for launched sessions" aria-label="Model">
+      <span className="mp-seg" role="radiogroup" aria-label="Model for launched sessions" data-tier={cur.tier}>
         {MODELS.map((m) => (
-          <option key={m} value={m}>
-            {m === "default" ? "Model: default" : `Model: ${m}`}
-          </option>
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={model === m}
+            className={`mp-opt mp-${TIERS[m].tier}${model === m ? " on" : ""}`}
+            title={TIERS[m].tip}
+            onClick={() => change({ target: { value: m } })}
+          >
+            <i className="mp-dot" />
+            {m}
+            {TIERS[m].price && <small>{TIERS[m].price}</small>}
+          </button>
         ))}
-      </select>
+      </span>
     </span>
   );
 }

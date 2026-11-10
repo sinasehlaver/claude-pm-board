@@ -104,9 +104,9 @@ const RESEARCH_ONLY_NOTE = [
 // short of building. You are the idea's future developer, not its builder yet.
 // A Build / Adopt+extend verdict auto-promotes the idea into a pm project (state +
 // backlog, no scaffold); Adopt / venturemind results stay in Todo with a note.
-// Building happens later, from the new project's own Run buttons. Batch promotion
-// with a build is still "Run @seq" (seedForIdeaPromotion).
-function seedForIdeaResearch({ title, note }) {
+// Building happens later, from the new project's own Run buttons. A batch Run on the
+// inbox (seedForIdeaPromotion) fans out one subagent per idea with this same brief.
+export function seedForIdeaResearch({ title, note, relay = false }) {
   const out = [
     `You're picking up an idea from the pm board's Ideas inbox. You are being`,
     `stationed as this idea's future developer — the one who will eventually`,
@@ -148,6 +148,8 @@ function seedForIdeaResearch({ title, note }) {
     "`knowledge/prospector/<slug>.md`, atelier's report to",
     "`knowledge/atelier/<slug>.md`).",
     "",
+  );
+  out.push(...(relay ? IDEA_FILING_RELAY : [
     "Finally, file the result — it depends on the outcome:",
     "- Adopt verdict, or a venturemind (business) idea: add ONE indented note line",
     "  under this idea's bullet in `.claude/backlog/ideas.md` (match it by its title",
@@ -183,8 +185,66 @@ function seedForIdeaResearch({ title, note }) {
     "     user can rename or move it from the board (the ▸ move-to-project button).",
     "  Nobody can be asked mid-run, so this is the default — say plainly in the",
     "  final message that it was auto-promoted and how to undo it.",
-  );
+  ]));
   return out.join("\n");
+}
+
+// Unattended (Fill) filing: headless claude can't Edit/Write the workspace's dot-claude dir, so every pm
+// bookkeeping step goes through the allowlisted backlog-cli. Research artifacts still go to knowledge/.
+const IDEA_FILING_RELAY = [
+  "Finally, file the result. You are UNATTENDED: Edit/Write under the workspace `.claude` dir is blocked, so use ONLY this CLI",
+  "for pm bookkeeping (match the idea by its exact title; never rename it):",
+  `  node ${BACKLOG_CLI} create <slug> "<descriptor, max 40 chars>" "<summary>" "<plan path>" "<next1|next2|...>" "<todo>" ["<todo>"...]`,
+  `  node ${BACKLOG_CLI} move ideas <Todo|Done> "<exact idea title>" ["note"]`,
+  `  node ${BACKLOG_CLI} add <slug> "<title>" ["note"]`,
+  "- Research-only idea: `move ideas Done \"<title>\" \"researched, see knowledge/research/<slug>.md\"`.",
+  "- Adopt verdict, or a venturemind (business) idea: `move ideas Todo \"<title>\" \"adopt <tool>, not built — see <report path>\"`",
+  "  (or the venturemind save path). The idea stays in Todo; the user decides next.",
+  "- Build or Adopt + extend, form \"pm feature\": no project. `add pm \"<human-voice todo>\" \"see knowledge/atelier/<file>.md\"`,",
+  "  then `move ideas Done \"<title>\" \"filed as a pm todo\"`.",
+  "- Build or Adopt + extend, form \"project\" or \"tool\" (atelier Steps 0-5 done): PROMOTE it so it shows on the Home board.",
+  "  Do not build (no Step 6, no PM_ROOT/<slug>/ scaffold). Pick slug = short memorable kebab-case product name; if",
+  "  `create` refuses an existing slug, retry with -2, -3. Run ONE `create`: descriptor <=40 plain chars; summary one line;",
+  "  plan path = knowledge/atelier/<file>.md; next = the phases as one-liners joined by `|` (Claude's own list); then",
+  "  HUMAN-VOICE todos only, one per user checkpoint (e.g. \"Build block A, tell me how to test it, and wait for me to test it\"),",
+  "  no phase ids or paths in titles. Then `move ideas Done \"<title>\" \"promoted to <slug>\"`. For a tool the entries.json row can't be",
+  "  written unattended: say so in the final message.",
+  "- Nobody can be asked mid-run: state every assumption you made in the final message, and say plainly that the idea was",
+  "  auto-promoted (to <slug>) and how to undo it (board's move / delete).",
+];
+
+// Fill: auto-marked ideas in one relay prompt, one research subagent per idea (the single-play brief, relay filing).
+export function seedForIdeaFill({ tasks }) {
+  const briefs = tasks
+    .map((t, i) => [`=== BRIEF ${i + 1} of ${tasks.length} (idea: ${t.title}) ===`, seedForIdeaResearch({ title: t.title, note: t.note, relay: true }), `=== END BRIEF ${i + 1} ===`].join("\n"))
+    .join("\n\n");
+  return [
+    `You're the orchestrator for ${tasks.length} auto-marked idea(s) from the pm board's Ideas inbox, run unattended by Fill.`,
+    "Each idea is separate and independent: spawn one subagent per idea (the Task tool, at most 3 at once) whose prompt is its BRIEF below,",
+    "verbatim. Do not merge ideas or let one steer another.",
+    "",
+    briefs,
+    "",
+    PACING_RELAY,
+    "",
+    SECURITY_NOTE,
+    PORT_NOTE,
+    TOOL_NOTE,
+    "",
+    "When every subagent is done, report per idea, one line each: researched, adopt, promoted to <slug>, or blocked — plus every assumption made.",
+  ].join("\n");
+}
+
+// Fill's prompt: project todos -> cross-project orchestrator, idea todos -> idea briefs; both -> two parts.
+export function seedForFill({ tasks }) {
+  const ideas = tasks.filter((t) => t.slug === "ideas");
+  const rest = tasks.filter((t) => t.slug !== "ideas");
+  const parts = [];
+  if (rest.length) parts.push(seedForCrossProjectRun({ tasks: rest, relay: true }));
+  if (ideas.length) parts.push(seedForIdeaFill({ tasks: ideas }));
+  return parts.length === 2
+    ? `Two independent jobs follow. Do PART 1 fully, then PART 2.\n\n=== PART 1 ===\n${parts[0]}\n\n=== PART 2 ===\n${parts[1]}`
+    : parts[0];
 }
 
 // One-line secure-by-default reminder appended to build prompts (not ideas research).
@@ -491,94 +551,43 @@ export function seedForCrossProjectRun({ tasks, relay = false }) {
   return out.join("\n");
 }
 
-// Seed prompt for "Run" on the Ideas inbox: promote every selected
-// idea into a real pm project (research + scaffold), instead of orchestrating
-// todos within one existing project.
+// Seed prompt for "Run" on the Ideas inbox: ONE orchestrator, one research subagent
+// per idea. Each subagent gets exactly what a single yellow ▶ gives that idea
+// (seedForIdeaResearch): research-only, auto-promote into a pm project, never build.
 function seedForIdeaPromotion({ tasks, relay = false }) {
-  const list = tasks
+  const briefs = tasks
     .map((t, i) => {
-      const head = `${i + 1}. ${t.title}`;
-      return t.note ? `${head}\n   ${t.note.split("\n").join("\n   ")}` : head;
+      const brief = seedForIdeaResearch({ title: t.title, note: t.note });
+      return [`=== BRIEF ${i + 1} of ${tasks.length} (idea: ${t.title}) ===`, brief, `=== END BRIEF ${i + 1} ===`].join("\n");
     })
-    .join("\n");
+    .join("\n\n");
   const out = [
-    `You're the orchestrator promoting a batch of ${tasks.length} selected idea(s)`,
-    "from the pm board's Ideas inbox into real pm projects.",
+    `You're the orchestrator for ${tasks.length} selected item(s) from the pm board's Ideas inbox.`,
     "",
-    "IDEAS:",
-    list,
+    "These are NOT todos of one project and NOT one batch of work. Each is a separate,",
+    "independent idea. Treat each exactly as if the user had opened it alone with the",
+    "yellow ▶ button. Do not merge ideas, share a plan between them, or let one idea's",
+    "result steer another's.",
     "",
-    "For EACH idea, spawn a subagent (the Task tool) scoped to just that idea. Ideas",
-    "that clearly become disjoint projects run in parallel; if two ideas look like",
-    "they'd become the same project, merge them into one subagent instead of creating",
-    "duplicates and say so in your final summary.",
+    "For EACH idea, spawn one subagent (the Task tool), at most 3 running concurrently.",
+    "A subagent's prompt is that idea's BRIEF below, verbatim (it is the very text a",
+    "single ▶ would seed). A brief says \"one-shot session\": that applies to the",
+    "subagent. You, the orchestrator, are the one who talks to the user.",
     "",
-    RESEARCH_ONLY_NOTE,
-    "(Applies per idea: a research-only idea gets its findings doc and nothing else.)",
+    briefs,
     "",
-    "Each subagent must:",
-    "1. Pick a kebab-case slug from the idea's title. Check .claude/backlog/ and",
-    "   .claude/state/ for collisions; on collision append -2, -3, ...",
-    "2. TRIAGE — ordered, take the first branch that fits:",
-    "   a. Genuine business/venture concept (a monetizable market play, not just",
-    "      \"this could theoretically be a product\") -> invoke the `venturemind` skill",
-    "      and run its normal workflow against the idea.",
-    "   b. Otherwise it is a personal-use idea (a tool for the user, not a business).",
-    "      Invoke the `prospector` skill FIRST - does this already exist, adopt or",
-    "      build? Run it through its verdict and its Step 5 save",
-    "      (knowledge/prospector/<slug>.md). Then branch on its verdict:",
-    "      - \"Adopt\" (a suitable off-the-shelf tool exists) -> STOP for this idea.",
-    "        Do NOT scaffold a project: no PM_ROOT/<slug>/, no CONTEXT.md, no",
-    "        state/backlog files, no atelier. Instead add an indented note line",
-    "        under the idea's bullet in .claude/backlog/ideas.md (match by title)",
-    "        with the verdict, the tool name, and prospector's report path, e.g.",
-    "        \"adopt <tool>, not built - see knowledge/prospector/<slug>.md\". Leave",
-    "        the bullet in ideas.md (with the note) so it",
-    "        isn't re-run. Skip steps 3 and 4 below for this idea and report it in",
-    "        your final summary as 'adopt, not built'.",
-    "      - \"Build\" or \"Adopt + extend\" (nothing suitable exists, or a gap is left",
-    "        to fill) -> continue into the `atelier` skill and run its FULL workflow,",
-    "        including Step 6 (Build) below. Feed prospector's findings in as its",
-    "        Step 0/1 input rather than re-searching.",
-    ...FORM_NOTE.split("\n").map((l) => "   " + l),
-    "   Form \"pm feature\": skip steps 3 and 4's project files - add ONE human-voice todo to",
-    "   .claude/backlog/pm.md pointing at the plan, and remove the idea's bullet.",
-    "   Form \"tool\": step 3 as for a project, plus the entries.json row.",
-    "   This is a one-shot session with no follow-up turn - state assumptions and",
-    "   proceed all the way through rather than stalling on an unanswerable question",
-    "   (prospector and atelier both end turns with a question - answer it yourself).",
-    "3. Create the project at PM_ROOT/<slug>/ (not for 'adopt' verdicts, see 2b):",
-    "   - mkdir PM_ROOT/<slug>/ and write PM_ROOT/<slug>/CONTEXT.md with the full",
-    "     research writeup: problem framing, findings (atelier's component",
-    "     build-vs-reuse table, or venturemind's market/legal findings - whichever",
-    "     skill ran), the verdict, and a concrete phased implementation plan",
-    "     (architecture, stack, phases). If atelier ran its Step 6, this also",
-    "     documents what got scaffolded/built and what's deferred.",
-    "   - If atelier ran Step 6, its scaffolded project files live at",
-    "     PM_ROOT/<slug>/ alongside CONTEXT.md. If venturemind ran instead (a",
-    "     business idea), still scaffold a minimal starting structure for the",
-    "     chosen technical architecture from its Phase 3, and fold any KVKK/legal",
-    "     constraints it found into CONTEXT.md and this project's Blockers.",
-    "   - Write .claude/state/<slug>.md (<=40 lines - the cap is enforced, do not",
-    "     exceed it): Now = \"researched, ready to build\" (or \"scaffolded, phase N",
-    "     next\" if atelier's Step 6 ran); Next = the top implementation phases as",
-    "     one-liners, pointing at CONTEXT.md for detail; Blockers = any",
-    "     compliance/legal flags from venturemind, else \"none\".",
-    "   - Write .claude/backlog/<slug>.md with HUMAN-READABLE todos only: one per",
-    "     remaining user checkpoint, phrased the way the user would ask (\"Build",
-    "     block A, tell me how to test it, and wait for me to test it\"). No phase",
-    "     ids, paths or implementation detail in titles; at most one indented note",
-    "     line pointing at CONTEXT.md. The phase breakdown lives in CONTEXT.md +",
-    "     state Next, never as backlog todos.",
-    "4. Remove the idea's bullet from .claude/backlog/ideas.md entirely - it's now",
-    "   promoted into its own project, don't leave a duplicate behind. (Not for",
-    "   'adopt' verdicts - those bullets stay, per 2b.)",
+    relay
+      ? "Nobody can answer questions in this unattended run: when a subagent reports an open question, record the assumption it made and keep going."
+      : "The user is present. Collect the subagents' open questions and ask them together in one batch (AskUserQuestion) before any idea is filed or promoted; ask nothing per idea mid-run.",
     "",
     relay ? PACING_RELAY : RUN_NOTE,
     "",
-    "When every idea is promoted (or skipped/merged, with a note why), summarise the",
-    "new project slugs created, which ideas were 'adopt, not built' (with the tool",
-    "named), and what, if anything, was skipped or merged.",
+    SECURITY_NOTE,
+    PORT_NOTE,
+    TOOL_NOTE,
+    "",
+    "When every subagent is done, report per idea, one line each: research-only, adopt,",
+    "business, or promoted-to-<slug> (with where the findings live).",
   ];
   return out.join("\n");
 }

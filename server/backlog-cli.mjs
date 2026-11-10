@@ -4,7 +4,7 @@
 // backlog/state through pm's own round-trip-safe parsers instead.
 //   node backlog-cli.mjs move  <slug> <Todo|Doing|Blocked|Done> "<exact title>" ["note"]
 //   node backlog-cli.mjs add   <slug> "<title>" ["note"]
-//   node backlog-cli.mjs create <slug> "<summary>" "<plan path>" "<next1|next2|...>" "<todo>" ["<todo>"...]
+//   node backlog-cli.mjs create <slug> "<descriptor>" "<summary>" "<plan path>" "<next1|next2|...>" "<todo>" ["<todo>"...]
 //                                                        (NEW project's state+backlog; refuses if it exists; no delete)
 //   node backlog-cli.mjs list  <slug> [state]            (read-only)
 //   node backlog-cli.mjs state <slug> now "<headline>" ["detail" ...]
@@ -18,6 +18,7 @@ import { readFile } from "node:fs/promises";
 import { readBacklog, writeBacklog, emptyBacklog, STATES } from "./backlog.mjs";
 import { readState, writeState } from "./state.mjs";
 import { candidates, compactDone } from "./compact.mjs";
+import { cleanDescriptor, writeRuleStub } from "./descriptor.mjs";
 
 // CLI field name -> state.resume key
 const RESUME_KEYS = { "last-result": "lastResult", "re-run": "rerun", branch: "branch", artifacts: "artifacts" };
@@ -101,9 +102,10 @@ export async function editNext(slug, op, items) {
 
 // Promote an idea to a project: writes the NEW state + backlog files. Create-only by design:
 // refuses if either file exists, and there is no delete/rename counterpart (that is the user's job).
-export async function createProject(slug, summary, plan, nexts, todos) {
+export async function createProject(slug, descriptor, summary, plan, nexts, todos) {
   if (!SLUG.test(slug)) throw new Error(`bad slug "${slug}"`);
   if (await readBacklog(slug) || await readState(slug)) throw new Error(`project "${slug}" already exists`);
+  const desc = cleanDescriptor(descriptor);
   if (![summary, plan, ...todos].every((s) => s && !/[\r\n]/.test(s))) throw new Error("summary, plan and todos must be non-empty single lines");
   await writeState(slug, {
     title: `${slug} — state`,
@@ -116,7 +118,8 @@ export async function createProject(slug, summary, plan, nexts, todos) {
   const b = emptyBacklog(slug);
   todos.forEach((t, i) => b.tasks.push({ id: i, state: "Todo", title: t, note: i === 0 ? `Plan: ${plan}. First step scaffolds ${slug}/ with a README run/test section.` : null, priority: null, done: null, seq: false }));
   await writeBacklog(slug, b);
-  return `${slug}: created state + backlog (${todos.length} todos)`;
+  await writeRuleStub(slug, desc);
+  return `${slug}: created state + backlog + rules heading (${todos.length} todos)`;
 }
 
 export async function compactCmd(slug, op, planPath) {
@@ -135,8 +138,8 @@ export async function compactCmd(slug, op, planPath) {
 export async function main(argv) {
   const [cmd, slug, ...rest] = argv;
   if (cmd === "create" && rest.length >= 5) {
-    const nexts = rest[2].split("|").map((s) => s.trim()).filter(Boolean);
-    return createProject(slug, rest[0], rest[1], nexts, rest.slice(3));
+    const nexts = rest[3].split("|").map((s) => s.trim()).filter(Boolean);
+    return createProject(slug, rest[0], rest[1], rest[2], nexts, rest.slice(4));
   }
   if (cmd === "move" && rest.length >= 2) return moveTask(slug, rest[0], rest[1], rest[2]);
   if (cmd === "add" && (rest.length === 1 || rest.length === 2)) return addTask(slug, rest[0], rest[1]);
@@ -146,7 +149,7 @@ export async function main(argv) {
   if (cmd === "state" && rest[0] === "resume" && rest.length === 3) return setResume(slug, rest[1], rest[2]);
   if (cmd === "compact" && (rest.length === 1 || rest.length === 2)) return compactCmd(slug, rest[0], rest[1]);
   throw new Error(
-    'usage: create <slug> "<summary>" "<plan path>" "<next1|next2>" "<todo>"... | list <slug> [state] | move <slug> <Todo|Doing|Blocked|Done> "<exact title>" ["note"] | add <slug> "<title>" ["note"] | state <slug> now "<headline>" ["detail"...] | state <slug> next <add|remove> "<item>"... | state <slug> resume <last-result|re-run|branch|artifacts> "<value>" | compact <slug> candidates | compact <slug> apply <plan.json>',
+    'usage: create <slug> "<descriptor, max 40 chars>" "<summary>" "<plan path>" "<next1|next2>" "<todo>"... | list <slug> [state] | move <slug> <Todo|Doing|Blocked|Done> "<exact title>" ["note"] | add <slug> "<title>" ["note"] | state <slug> now "<headline>" ["detail"...] | state <slug> next <add|remove> "<item>"... | state <slug> resume <last-result|re-run|branch|artifacts> "<value>" | compact <slug> candidates | compact <slug> apply <plan.json>',
   );
 }
 

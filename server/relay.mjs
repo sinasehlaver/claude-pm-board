@@ -35,6 +35,9 @@ export function relayConfig(env = process.env) {
     claudeBin: env.CLAUDE_BIN || "claude",
     stop5h: n("PM_RELAY_STOP_5H", 0.95), // utilization fraction at which we stop and wait
     stop7d: n("PM_RELAY_STOP_7D", 0.97),
+    handoff: env.PM_RELAY_HANDOFF !== "0", // write a handoff before the hard stop, restart fresh after the reset
+    hand5h: n("PM_RELAY_HANDOFF_5H", 0.9), // soft threshold: stop the child and ask for a handoff
+    hand7d: n("PM_RELAY_HANDOFF_7D", 0.95),
     bufferMs: n("PM_RELAY_BUFFER_MS", 90_000), // slack after the reset moment
     tickMs: n("PM_RELAY_TICK_MS", 30_000), // sleep granularity (survives Mac sleep/wake)
     unknownResetMs: n("PM_RELAY_UNKNOWN_RESET_MS", 15 * 60_000), // limit hit, no reset time known
@@ -48,7 +51,7 @@ export function relayConfig(env = process.env) {
 
 // ---------- pure logic (unit-tested) --------------------------------------
 
-export const emptyRun = () => ({ sessionId: null, windows: {}, rejected: null, result: null });
+export const emptyRun = () => ({ sessionId: null, windows: {}, rejected: null, result: null, lastText: "" });
 
 const frac = (u) => (typeof u !== "number" ? 0 : u > 1 ? u / 100 : u);
 
@@ -62,6 +65,9 @@ export function foldEvent(st, ev) {
       st.windows[k] = { utilization: frac(w.utilization), resetsAt: w.resetsAt };
     if (info.status === "rejected")
       st.rejected = { type: info.rateLimitType || "five_hour", resetsAt: info.resetsAt };
+  } else if (ev.type === "assistant" && Array.isArray(ev.message?.content)) {
+    const t = ev.message.content.filter((b) => b?.type === "text").map((b) => b.text).join("\n").trim();
+    if (t) st.lastText = t;
   } else if (ev.type === "result") {
     st.result = { isError: !!ev.is_error, text: String(ev.result ?? ""), subtype: ev.subtype || "" };
   }
@@ -79,6 +85,12 @@ export function softStop(st, cfg, now = Date.now()) {
     if (w && w.utilization >= limit && w.resetsAt * 1000 > now) return { type, resetsAtMs: w.resetsAt * 1000 };
   }
   return null;
+}
+
+// Past the (lower) handoff threshold while the window is open? Same shape as softStop.
+export function handoffStop(st, cfg, now = Date.now()) {
+  if (!cfg.handoff) return null;
+  return softStop(st, { stop5h: cfg.hand5h, stop7d: cfg.hand7d }, now);
 }
 
 // Fill job (spec.fill.stop7d, a 0..1 fraction): today's share of the weekly quota is used up.
@@ -170,6 +182,51 @@ export function continuePrompt({ reason, open, limitType, at }) {
     openList(open),
     "",
     "Continue with them. If one is genuinely blocked, move it to Blocked in its .claude/backlog/<slug>.md with a one-line note saying why, and move on. Do not stop while a todo is still open and workable.",
+  ].join("\n");
+}
+
+export const HANDOFF_TAIL = 1500;
+
+// The one short turn that asks the (resumed) agent for its handoff. Text only: relay writes the file.
+export function handoffPrompt({ open }) {
+  return [
+    "The account usage limit is about to be reached, so this session will be stopped and restarted fresh after the reset (a cold cache makes resuming this long context expensive).",
+    "Reply with the HANDOFF only, as your final message, in plain markdown, <=25 lines, and call no tools: what is done, what is left per todo (use the exact todo titles), files touched, and the very next step. No preamble.",
+    "",
+    "Open todos:",
+    openList(open),
+  ].join("\n");
+}
+
+// Used when the handoff turn cannot run or returns nothing (limit already rejected, crash).
+export function mechanicalHandoff({ open, lastText, why }) {
+  const tail = String(lastText || "").trim().slice(-HANDOFF_TAIL);
+  return [
+    `# Handoff (auto-generated: ${why})`,
+    "",
+    "## Still open (by title)",
+    open.length ? openList(open) : "(none)",
+    "",
+    "## Last thing the agent said",
+    tail || "(nothing captured)",
+    "",
+    "Check each open todo against what is already on disk (git-less: look at the files) and continue from there.",
+  ].join("\n");
+}
+
+// First prompt of the FRESH session that follows a handoff.
+export function freshPrompt({ brief, handoff, open }) {
+  return [
+    brief,
+    "",
+    "--- CONTINUING AFTER A USAGE-LIMIT RESET ---",
+    "A previous session on this brief was stopped before the limit. Continue from its handoff below; do not redo finished work. Todos are matched by title, never rename one.",
+    "",
+    "Handoff:",
+    handoff,
+    "",
+    "Still open:",
+    openList(open),
   ].join("\n");
 }
 
@@ -302,7 +359,7 @@ export const QUIET_NOTE =
   "Tool names are case-sensitive: call `Bash`, `Read`, `Edit`, never `bash`.";
 
 // One child run. Resolves { st, softStopped } once claude has exited.
-function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
+function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note, noStops = false }) {
   const args = [
     "-p",
     "--output-format", "stream-json",
@@ -329,6 +386,7 @@ function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
   const st = emptyRun();
   let softStopped = null;
   let filled = false;
+  let handoffStopped = null;
   const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
   rl.on("line", (line) => {
     let ev;
@@ -340,13 +398,22 @@ function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
     foldEvent(st, ev);
     if (ev?.type === "rate_limit_event") saveLimits(spec.root, st.windows);
     onEvent?.(ev, st);
-    if (!filled && !softStopped && fillStop(st, spec)) {
+    if (!noStops && !filled && !softStopped && !handoffStopped && fillStop(st, spec)) {
       filled = true;
       note(`weekly ${Math.round(st.windows.seven_day.utilization * 100)}% — today's fill target reached, stopping`);
       child.kill("SIGINT");
       setTimeout(() => child.kill("SIGKILL"), cfg.killGraceMs).unref();
     }
-    if (!softStopped && !filled) {
+    if (!noStops && !handoffStopped && !softStopped && !filled) {
+      const h = handoffStop(st, cfg);
+      if (h) {
+        handoffStopped = h;
+        note(`${h.type} utilization ${Math.round(st.windows[h.type].utilization * 100)}% — near the limit, stopping for a handoff`);
+        child.kill("SIGINT");
+        setTimeout(() => child.kill("SIGKILL"), cfg.killGraceMs).unref();
+      }
+    }
+    if (!noStops && !handoffStopped && !softStopped && !filled) {
       const s = softStop(st, cfg);
       if (s) {
         softStopped = s;
@@ -361,7 +428,7 @@ function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note }) {
     child.on("error", (e) => {
       st.result = { isError: true, text: `spawn failed: ${e.message}`, subtype: "spawn" };
     });
-    child.on("close", () => resolve({ st, softStopped, filled }));
+    child.on("close", () => resolve({ st, softStopped, filled, handoffStopped }));
   });
 }
 
@@ -478,6 +545,7 @@ export async function runRelay(specPath, env = process.env) {
   const firstPrompt = spec.track ? markPrompt(spec.prompt, spec.id) : spec.prompt;
   let prompt = firstPrompt;
   let resumeId = null;
+  let freshNext = null; // set when a handoff was written: next run starts a fresh session
   let open = openTasks(spec.root, spec.tasks);
   log(`started: ${spec.tasks.length} todo(s) — ${spec.label}`);
   save();
@@ -501,9 +569,9 @@ export async function runRelay(specPath, env = process.env) {
     job.waitReason = null;
     job.open = open.length;
     save();
-    log(job.attempt === 1 ? "run 1: launching" : `run ${job.attempt}: resuming session ${resumeId ? resumeId.slice(0, 8) : "(new)"}`);
+    log(job.attempt === 1 ? "run 1: launching" : `run ${job.attempt}: ${resumeId ? `resuming session ${resumeId.slice(0, 8)}` : job.mode === "fresh" && job.attempt > 1 ? "fresh session from handoff" : "new session"}`);
     const prevOpen = open.length;
-    const { st, softStopped, filled } = await runChild({
+    const run = await runChild({
       cfg,
       spec,
       prompt,
@@ -522,6 +590,8 @@ export async function runRelay(specPath, env = process.env) {
       note: log,
     });
     current = null;
+    const { st, filled, handoffStopped } = run;
+    let softStopped = run.softStopped;
     if (stopping) return stopped();
     if (st.sessionId) {
       resumeId = st.sessionId;
@@ -530,6 +600,34 @@ export async function runRelay(specPath, env = process.env) {
     open = openTasks(spec.root, spec.tasks);
     job.open = open.length;
     if (filled) return finish("filled", `today's fill target reached, ${open.length} todo(s) left for later`);
+    if (handoffStopped && open.length) {
+      softStopped = handoffStopped;
+      let text = "";
+      const hardRejected = !!st.rejected;
+      if (!hardRejected && resumeId) {
+        log("asking the agent for a handoff (one short resumed turn)");
+        const h = await runChild({
+          cfg, spec, prompt: handoffPrompt({ open }), resumeId, noStops: true, note: log,
+          onChild: (ch) => (current = ch),
+          onEvent: (ev) => echo(ev),
+        });
+        current = null;
+        if (stopping) return stopped();
+        if (!h.st.rejected && h.st.result && !h.st.result.isError) text = h.st.result.text.trim();
+        if (h.st.sessionId) job.sessionId = h.st.sessionId;
+      }
+      const agent = !!text;
+      if (!text) text = mechanicalHandoff({ open, lastText: st.lastText, why: hardRejected ? "limit already rejected" : "handoff turn returned nothing" });
+      const hp = join(dir, `${spec.id}.handoff.md`);
+      writeFileSync(hp, text + "\n");
+      job.handoff = hp;
+      job.mode = "fresh";
+      freshNext = text;
+      log(`handoff written (${agent ? "by the agent" : "mechanical"}): ${hp}`);
+      open = openTasks(spec.root, spec.tasks);
+      job.open = open.length;
+      if (!open.length) return finish("done", "all todos resolved");
+    }
     const d = decide({ st, softStopped, open: open.length, prevOpen, now: Date.now(), cfg, c });
 
     if (d.kind === "done") return finish("done", d.why);
@@ -546,6 +644,12 @@ export async function runRelay(specPath, env = process.env) {
       await sleepUntil(d.until, cfg, save, () => stopping);
       if (stopping) return stopped();
       alert(cfg, "pm relay — resuming", `${spec.label}: ${open.length} todo(s) left.`);
+      if (freshNext) {
+        resumeId = null; // fresh session: no --resume, no old context to re-read cold
+        prompt = freshPrompt({ brief: firstPrompt, handoff: freshNext, open });
+        freshNext = null;
+        continue;
+      }
       prompt = continuePrompt({ reason: d.type === "error" ? "error" : "limit", open, limitType: d.type, at: Date.now() });
     } else {
       prompt = continuePrompt({ reason: "nudge", open });

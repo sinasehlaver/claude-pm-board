@@ -1,6 +1,6 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -74,13 +74,17 @@ test("state resume sets one Resume field and rejects unknown fields", async () =
 });
 
 test("create: writes a new project's state+backlog once, refuses an existing slug", async () => {
-  await C.createProject("newp", "does a thing", "knowledge/atelier/x.md", ["a", "b"], ["Build block A", "Build block B"]);
+  await assert.rejects(C.createProject("newp", "x".repeat(41), "does a thing", "p", [], ["t"]), { code: "BAD_DESCRIPTOR" });
+  await assert.rejects(C.createProject("newp", "", "does a thing", "p", [], ["t"]), { code: "BAD_DESCRIPTOR" });
+  assert.ok(!existsSync(join(root, ".claude/backlog/newp.md")));
+  await C.main(["create", "newp", "a thing doer", "does a thing", "knowledge/atelier/x.md", "a|b", "Build block A", "Build block B"]);
+  assert.match(readFileSync(join(root, ".claude/rules/newp.md"), "utf8"), /^---\npaths: newp\/\*\*\n---\n\n# newp\/ — a thing doer\n$/);
   const t = readFileSync(join(root, ".claude/backlog/newp.md"), "utf8");
   assert.match(t, /## Todo\n- Build block A\n {2}Plan: knowledge\/atelier\/x\.md/);
   assert.match(readFileSync(join(root, ".claude/state/newp.md"), "utf8"), /Full plan: knowledge\/atelier\/x\.md[\s\S]*## Next\n- a\n- b/);
-  await assert.rejects(C.createProject("newp", "s", "p", [], ["t"]), /already exists/);
+  await assert.rejects(C.createProject("newp", "d", "s", "p", [], ["t"]), /already exists/);
   seed();
-  await assert.rejects(C.createProject("p", "s", "p", [], ["t"]), /already exists/);
+  await assert.rejects(C.createProject("p", "d", "s", "p", [], ["t"]), /already exists/);
 });
 
 test("state next add/remove edits the Next list, dedupes, rejects bad input", async () => {

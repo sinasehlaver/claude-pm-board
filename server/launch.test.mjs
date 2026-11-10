@@ -7,7 +7,7 @@ import { join } from "node:path";
 process.env.PM_LAUNCH_DRYRUN = "1";
 const root = mkdtempSync(join(tmpdir(), "pm-launch-")); // no real .claude/settings*.json
 process.env.PM_ROOT = root;
-const { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForDoctorFinding, launchClaude } = await import("./launch.mjs");
+const { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForIdeaFill, seedForFill, seedForContinue, seedForSecurityAudit, seedForDoctorFinding, launchClaude } = await import("./launch.mjs");
 
 test("seedForSequentialRun: single todo skips the subagent, multiple fan out", () => {
   const one = seedForSequentialRun({ slug: "p", tasks: [{ title: "a" }] });
@@ -120,7 +120,7 @@ test("seedForCrossProjectRun groups by project and carries pacing + read-first r
   assert.doesNotMatch(s, /localhost:4310|vscode-claude-status-cache/);
 });
 
-test("seedForSequentialRun on ideas promotes each into a real pm project", () => {
+test("seedForSequentialRun on ideas: one orchestrator, one ▶-style subagent per idea, no build", () => {
   const s = seedForSequentialRun({
     slug: "ideas",
     tasks: [
@@ -128,17 +128,26 @@ test("seedForSequentialRun on ideas promotes each into a real pm project", () =>
       { title: "idea two", note: null },
     ],
   });
-  assert.match(s, /2 selected idea/);
-  assert.match(s, /1\. idea one/);
+  assert.match(s, /NOT todos of one project/);
+  assert.match(s, /yellow ▶/);
+  assert.match(s, /spawn one subagent/);
+  assert.match(s, /at most 3/);
+  assert.match(s, /IDEA: idea one/);
   assert.match(s, /note one/);
-  assert.match(s, /2\. idea two/);
+  assert.match(s, /IDEA: idea two/);
+  assert.match(s, /BRIEF 2 of 2/);
   assert.match(s, /venturemind/);
-  assert.match(s, /atelier/);
-  assert.match(s, /CONTEXT\.md/);
-  assert.match(s, /mkdir PM_ROOT\/<slug>\//);
-  assert.match(s, /Remove the idea's bullet from \.claude\/backlog\/ideas\.md/);
+  assert.match(s, /RESEARCH-ONLY CHECK/);
   assert.match(s, /SINGLE-SESSION PACING/);
+  assert.match(s, /AskUserQuestion/);
+  assert.match(s, /promoted-to-<slug>/);
+  assert.doesNotMatch(s, /FULL workflow/);
+  assert.doesNotMatch(s, /mkdir PM_ROOT/);
+  assert.doesNotMatch(s, /including Step 6/);
+  assert.doesNotMatch(s, /Create the project at PM_ROOT/);
   assert.doesNotMatch(s, /localhost:4310|vscode-claude-status-cache/);
+  const r = seedForSequentialRun({ slug: "ideas", tasks: [{ title: "x" }], relay: true });
+  assert.match(r, /record the assumption/);
 });
 
 test("both ideas prompts carry the project / tool / pm feature form decision", () => {
@@ -149,18 +158,6 @@ test("both ideas prompts carry the project / tool / pm feature form decision", (
     assert.match(s, /"kind\\?": \\?"tool\\?"/);
     assert.match(s, /backlog\/pm\.md/);
   }
-});
-
-test("seedForSequentialRun on ideas runs prospector first and stops on an adopt verdict", () => {
-  const s = seedForSequentialRun({ slug: "ideas", tasks: [{ title: "idea one", note: null }] });
-  assert.match(s, /prospector/);
-  assert.ok(s.indexOf("venturemind") < s.indexOf("prospector"));
-  assert.ok(s.indexOf("prospector") < s.indexOf("`atelier` skill and run its FULL workflow"));
-  assert.match(s, /"Adopt" \(a suitable off-the-shelf tool exists\) -> STOP/);
-  assert.match(s, /Do NOT scaffold a project/);
-  assert.match(s, /adopt <tool>, not built - see knowledge\/prospector\/<slug>\.md/);
-  assert.match(s, /the bullet in ideas\.md \(with the note\)/);
-  assert.match(s, /'adopt, not built'/);
 });
 
 test("launchClaude dryrun builds a resume command", async () => {
@@ -297,4 +294,19 @@ test("model pref adds --model to the interactive launch and the relay spec; defa
   assert.equal(spec.modelArg, "sonnet");
   savePrefs({ model: "default" });
   assert.doesNotMatch((await launchClaude({ prompt: "hi" })).cmd, /--model/);
+});
+
+test("seedForIdeaFill/seedForFill: relay idea briefs file via backlog-cli, never hand-edit the dot-claude dir", () => {
+  const ideas = [{ slug: "ideas", title: "idea one", note: "n1" }, { slug: "ideas", title: "idea two" }];
+  const p = seedForIdeaFill({ tasks: ideas });
+  assert.match(p, /BRIEF 2 of 2 \(idea: idea two\)/);
+  assert.match(p, /backlog-cli\.mjs create <slug>/);
+  assert.match(p, /move ideas Done/);
+  assert.match(p, /promoted to <slug>/);
+  assert.match(p, /UNATTENDED/);
+  assert.doesNotMatch(p, /Write \.claude\/state\/<slug>\.md/);
+  assert.doesNotMatch(p, /Remove the idea's bullet/);
+  const mixed = seedForFill({ tasks: [...ideas, { slug: "hub", title: "t" }] });
+  assert.match(mixed, /PART 1[\s\S]*cross-project batch[\s\S]*PART 2[\s\S]*Ideas inbox/);
+  assert.doesNotMatch(seedForFill({ tasks: [{ slug: "hub", title: "t" }] }), /Ideas inbox/);
 });

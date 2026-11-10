@@ -87,7 +87,7 @@ test("cleanSettings: strict rejects bad types and ranges", () => {
 
 test("setAuto: validates slug/title, refuses ideas, round-trips", () => {
   assert.throws(() => fill.setAuto("../x", "t", true));
-  assert.throws(() => fill.setAuto("ideas", "t", true));
+  assert.doesNotThrow(() => fill.setAuto("ideas", "t", false));
   assert.throws(() => fill.setAuto("hub", "", true));
   assert.throws(() => fill.setAuto("hub", "x".repeat(501), true));
   fill.setAuto("hub", "auto one", true);
@@ -109,7 +109,8 @@ test("autoTodos: open marked todos only; a todo fill tried twice is skipped", as
 });
 
 test("auto project: every open todo, including ones added after it was switched on", async () => {
-  assert.throws(() => fill.setAutoProject("ideas", true));
+  assert.deepEqual(fill.setAutoProject("ideas", true), ["ideas"]);
+  assert.deepEqual(fill.setAutoProject("ideas", false), []);
   assert.throws(() => fill.setAutoProject("../x", true));
   const file = join(root, ".claude/backlog/hub.md");
   const orig = readFileSync(file, "utf8");
@@ -226,7 +227,8 @@ test("routes: settings + auto validation, Fill now launches a fill relay job", a
   assert.equal((await put("/api/fill/auto", { slug: "hub", title: "auto two" })).status, 400);
   assert.equal((await put("/api/fill/auto", { slug: "../etc", title: "x", on: true })).status, 400);
   assert.equal((await put("/api/fill/auto-project", { slug: "hub" })).status, 400);
-  assert.equal((await put("/api/fill/auto-project", { slug: "ideas", on: true })).status, 400);
+  assert.equal((await put("/api/fill/auto-project", { slug: "ideas", on: true })).status, 200);
+  assert.equal((await put("/api/fill/auto-project", { slug: "ideas", on: false })).status, 200);
   assert.equal((await put("/api/fill/auto-project", { slug: "../etc", on: true })).status, 400);
   assert.deepEqual(await (await put("/api/fill/auto-project", { slug: "hub", on: true })).json(), ["hub"]);
   assert.deepEqual((await (await fetch(B + "/api/fill")).json()).autoProjects, ["hub"]);
@@ -256,4 +258,22 @@ test("routes: settings + auto validation, Fill now launches a fill relay job", a
   const none = await fetch(B + "/api/fill/run", { method: "POST" });
   assert.equal(none.status, 409);
   assert.match((await none.json()).error, /no open todos/);
+});
+
+test("ideas: an auto idea is picked up and fill's prompt is the relay idea brief", async () => {
+  mkdirSync(join(root, ".claude/backlog"), { recursive: true });
+  writeFileSync(join(root, ".claude/backlog/ideas.md"), "# ideas — backlog\nUpdated: 2026-10-01\n\n## Todo\n- a fine idea\n  its note\n");
+  fill.setAuto("ideas", "a fine idea", true);
+  try {
+    const got = await fill.autoTodos(root, []);
+    assert.ok(got.some((t) => t.slug === "ideas" && t.title === "a fine idea"));
+    const { seedForFill } = await import("./launch.mjs");
+    const p = seedForFill({ tasks: got.filter((t) => t.slug === "ideas") });
+    assert.match(p, /IDEA: a fine idea/);
+    assert.match(p, /backlog-cli\.mjs create /);
+    assert.match(p, /move ideas Done/);
+    assert.doesNotMatch(p, /Remove the idea's bullet from/);
+  } finally {
+    fill.setAuto("ideas", "a fine idea", false);
+  }
 });

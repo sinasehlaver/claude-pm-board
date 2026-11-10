@@ -10,7 +10,7 @@ import { PM_ROOT } from "./paths.mjs";
 import { readBacklog } from "./backlog.mjs";
 import { discoverSlugs } from "./projects.mjs";
 import { listRelayJobs, limitsPath, writeJson } from "./relay.mjs";
-import { seedForCrossProjectRun, launchRelayDetached } from "./launch.mjs";
+import { seedForFill, launchRelayDetached } from "./launch.mjs";
 
 const DAY = 86_400_000;
 const WEEK = 7 * DAY;
@@ -80,7 +80,7 @@ export function readAuto(root = PM_ROOT) {
 }
 
 export function setAuto(slug, title, on, root = PM_ROOT) {
-  if (!SLUG_RE.test(slug || "") || slug === "ideas") throw new Error("bad slug");
+  if (!SLUG_RE.test(slug || "")) throw new Error("bad slug");
   if (typeof title !== "string" || !title.trim() || title.length > MAX_TITLE) throw new Error("bad title");
   const all = readAuto(root);
   const set = new Set(all[slug] || []);
@@ -95,11 +95,11 @@ export function setAuto(slug, title, on, root = PM_ROOT) {
 // [slug, …] — every open todo of these projects is auto, including ones added later.
 export function readAutoProjects(root = PM_ROOT) {
   const raw = readJson(autoProjectsPath(root), []);
-  return Array.isArray(raw) ? [...new Set(raw.filter((s) => typeof s === "string" && SLUG_RE.test(s) && s !== "ideas"))] : [];
+  return Array.isArray(raw) ? [...new Set(raw.filter((s) => typeof s === "string" && SLUG_RE.test(s)))] : [];
 }
 
 export function setAutoProject(slug, on, root = PM_ROOT) {
-  if (!SLUG_RE.test(slug || "") || slug === "ideas") throw new Error("bad slug");
+  if (!SLUG_RE.test(slug || "")) throw new Error("bad slug");
   const set = new Set(readAutoProjects(root));
   if (on) set.add(slug);
   else set.delete(slug);
@@ -209,7 +209,7 @@ async function autoEntries(root, jobs) {
   const { all } = await discoverSlugs();
   const out = [];
   for (const slug of new Set([...projects, ...Object.keys(marks)])) {
-    if (slug === "ideas" || !all.includes(slug)) continue;
+    if (!all.includes(slug)) continue;
     const want = new Set(marks[slug] || []);
     const whole = projects.has(slug);
     const bl = await readBacklog(slug);
@@ -265,7 +265,7 @@ export async function runFill({ root = PM_ROOT, now = Date.now(), idle = idleSec
     return { launched: false, pending: !!status.settings.pending && s.decision.wait, status };
   }
   if (s.settings.pending) writeFillSettings({ pending: false }, root);
-  const prompt = seedForCrossProjectRun({ tasks: todos, relay: true });
+  const prompt = seedForFill({ tasks: todos });
   const projects = new Set(todos.map((t) => t.slug)).size;
   const r = await launch({
     cwd: root,

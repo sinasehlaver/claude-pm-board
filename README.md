@@ -24,8 +24,9 @@ session, or you a week later, doesn't start from zero.
 
 - **▶ on a todo:** opens a terminal with a Claude Code session already briefed on that task.
 - **Run selected:** one session works through the todos you ticked, using subagents.
-- **Unattended runs:** headless batches that wait out rate limits and resume by themselves.
-- **Fill unused quota:** todos you mark "auto" run while you're away, up to today's share of your weekly limit.
+- **Unattended runs:** headless batches that hand off near a limit and continue in a fresh session after the reset.
+- **Fill unused quota:** todos (and ideas) you mark "auto" run while you're away, up to today's share of your weekly limit.
+- **Handoff before the limit (opt-in):** a Setup card that tells an open session to write a handoff before a usage limit.
 
 **Look after the workspace**
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { get, send } from "./api";
 import ModelPick from "./ModelPick.jsx";
 import StatusLine from "./StatusLine.jsx";
+import LimitHook from "./LimitHook.jsx";
 import ClaudeConfig from "./ClaudeConfig.jsx";
 
 // Launch setup: environment checks + which Claude Code binary pm opens sessions with.
@@ -95,6 +96,7 @@ export default function Setup({ onBack, onSaved }) {
             <ModelPick />
           </li>
           <StatusLine />
+          <LimitHook />
           <ClaudeConfig />
         </ul>
       )}

@@ -135,10 +135,9 @@ async function newestHandoff(slug) {
 
 // kind: "project" (default; every slug without an entry), "tool", or "all".
 export async function listProjects(kind = "project") {
-  const { all: every, rules } = await discoverSlugs();
+  const { all: every } = await discoverSlugs();
   const all = kind === "all" ? every : every.filter((s) => kindOf(s) === kind);
   const activity = await readActivity();
-  const rulesSet = new Set(rules);
   return Promise.all(
     all.map(async (slug) => {
       const [st, bl, adhocDir] = await Promise.all([
@@ -155,7 +154,7 @@ export async function listProjects(kind = "project") {
         title: (await ruleTitle(slug)) || slug,
         kind: kindOf(slug),
         description: await description(slug),
-        adhoc: slug !== "ideas" && !rulesSet.has(slug) && !adhocDir,
+        adhoc: slug !== "ideas" && !adhocDir,
         pinned: slug === "ideas",
         status: st ? st.now : "",
         next: st && st.next.length ? st.next[0] : "",
@@ -187,8 +186,9 @@ export async function getProject(slug) {
     kind: kindOf(slug),
     path: readEntries()[slug]?.path || null,
     description: await description(slug),
-    adhoc: slug !== "ideas" && !(await hasDir(slug)) && !(await ruleTitle(slug)),
+    adhoc: slug !== "ideas" && !(await hasDir(slug)),
     pinned: slug === "ideas",
+    hasStart: Boolean(await startScript(slug)),
     state: st,
     backlog: bl,
     activity: activity

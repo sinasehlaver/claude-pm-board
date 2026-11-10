@@ -37,12 +37,14 @@
     "files": [
       "electron/**",
       "server/**",
+      "hooks/**",
       "skills/**",
       "web/dist/**",
       "package.json"
     ],
     "asarUnpack": [
       "server/**",
+      "hooks/**",
       "skills/**"
     ],
     "mac": {

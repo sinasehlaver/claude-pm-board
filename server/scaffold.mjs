@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { PM_ROOT, STATE_DIR, BACKLOG_DIR, RULES_DIR } from "./paths.mjs";
 import { serializeState } from "./state.mjs";
 import { emptyBacklog, writeBacklog } from "./backlog.mjs";
+import { cleanDescriptor, ruleHeading } from "./descriptor.mjs";
 
 export const NEW_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
@@ -19,7 +20,7 @@ export function slugify(name) {
 
 const exists = (p) => access(p).then(() => true, () => false);
 
-export async function scaffoldProject(name, { title } = {}) {
+export async function scaffoldProject(name, { title, descriptor } = {}) {
   const slug = slugify(name);
   const dir = join(PM_ROOT, slug);
   const files = {
@@ -30,6 +31,7 @@ export async function scaffoldProject(name, { title } = {}) {
   for (const p of [dir, ...Object.values(files)]) {
     if (await exists(p)) throw Object.assign(new Error("project already exists"), { code: "EXISTS" });
   }
+  const desc = cleanDescriptor(descriptor);
   const label = String(title || slug).replace(/\s+/g, " ").trim().slice(0, 80) || slug;
 
   await mkdir(dir, { recursive: true });
@@ -54,7 +56,7 @@ export async function scaffoldProject(name, { title } = {}) {
   await writeBacklog(slug, emptyBacklog(slug));
   await writeFile(
     files.rules,
-    `---\npaths: ${slug}/**\n---\n\n# ${slug}\n\n## Run & verify\n\nTODO: install, run, the one verify entrypoint, unit tests.\n\n## Gotchas\n\n- (none yet)\n`,
+    `---\npaths: ${slug}/**\n---\n\n${ruleHeading(slug, desc)}\n\n## Run & verify\n\nTODO: install, run, the one verify entrypoint, unit tests.\n\n## Gotchas\n\n- (none yet)\n`,
     { flag: "wx" },
   );
   return slug;

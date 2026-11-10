@@ -8,6 +8,7 @@ import { KINDS, entryDir } from "./entries.mjs";
 import { readState, writeState } from "./state.mjs";
 import { readBacklog, writeBacklog, emptyBacklog, runnableTasks, readArchive, restoreTask } from "./backlog.mjs";
 import { listSessions, fileSession, sessionToTask, sessionToNewProject, moveTask } from "./sessions.mjs";
+import { cleanDescriptor, writeRuleStub } from "./descriptor.mjs";
 import { seedForTask, seedForSequentialRun, seedForCrossProjectRun, seedForContinue, seedForSecurityAudit, seedForCompactDone, seedForDoctorFinding, seedForDoctorFindings, launchClaude, launchRelay, launchCommand } from "./launch.mjs";
 import { listRelayJobs, relayDir, dismissRelay } from "./relay.mjs";
 import { latestTodos, resolveCrossItems } from "./todos.mjs";
@@ -24,6 +25,8 @@ import { homeStrip, writePrefs as writeStripPrefs } from "./home-strip.mjs";
 import { setupStatus, savePrefs } from "./setup.mjs";
 import { claudeConfig, previewFile } from "./claude-config.mjs";
 import { statuslineStatus, saveStatusline, restoreStatusline } from "./statusline.mjs";
+import { limitHookStatus, setLimitHook } from "./limit-hook.mjs";
+import { readBusiness, setBusiness } from "./business.mjs";
 import { fillStatus, runFill, writeFillSettings, setAuto, setAutoProject } from "./fill.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -85,13 +88,21 @@ const guarded = (fn) => (req, res) => {
 app.get("/api/statusline", guarded(() => statuslineStatus()));
 app.put("/api/statusline", guarded((req) => saveStatusline(req.body)));
 app.post("/api/statusline/restore", guarded(() => restoreStatusline()));
+// "Handoff before usage limit": writes only our hooks entries in ~/.claude/settings.json
+app.get("/api/limit-hook", guarded(() => limitHookStatus()));
+app.put("/api/limit-hook", guarded((req) => setLimitHook(req.body)));
 // read-only Claude config review; ?id= previews one inventory file (id from the list, never a path)
 app.get("/api/claude-config", guarded((req) => (req.query.id ? previewFile(String(req.query.id)) : claudeConfig())));
 
 // listening ports per project (cwd under PM_ROOT), cached so the 30s refetches don't spawn lsof each time
 let runCache = { at: 0, map: new Map() };
-async function runningBySlug() {
-  if (Date.now() - runCache.at < 4000) return runCache.map;
+let runPending = null;
+// list + detail refetch in the same tick: they share one lsof
+function runningBySlug() {
+  if (Date.now() - runCache.at < 4000) return Promise.resolve(runCache.map);
+  return (runPending ??= scanRunning().finally(() => (runPending = null)));
+}
+async function scanRunning() {
   const map = new Map();
   try {
     for (const r of await listPorts()) {
@@ -121,21 +132,37 @@ app.get("/api/projects/:slug", async (req, res, next) => {
   try {
     const p = await getProject(req.params.slug);
     if (!p) return res.status(404).json({ error: "no such project" });
-    res.json(p);
+    // only start.sh projects show running ports, so the others never pay for lsof
+    res.json({ ...p, business: readBusiness(p.slug), running: p.hasStart ? (await runningBySlug()).get(p.slug) || [] : [] });
   } catch (e) {
+    next(e);
+  }
+});
+
+app.put("/api/projects/:slug/business", async (req, res, next) => {
+  if (!canLaunch(req)) return res.status(403).json({ error: "needs loopback or PM_TOKEN" });
+  try {
+    if (!(await getProject(req.params.slug))) return res.status(404).json({ error: "no such project" });
+    const { verdict = null, note = "" } = req.body || {};
+    res.json({ business: setBusiness(req.params.slug, verdict, note) });
+  } catch (e) {
+    if (e.status === 400) return res.status(400).json({ error: e.message });
     next(e);
   }
 });
 
 app.post("/api/projects", async (req, res, next) => {
   try {
-    const { slug, title } = req.body || {};
-    if (!SLUG_RE.test(slug || "")) return res.status(400).json({ error: "bad slug" });
+    const { slug, descriptor } = req.body || {};
+    if (typeof slug !== "string" || !SLUG_RE.test(slug)) return res.status(400).json({ error: "bad slug" });
     const path = join(BACKLOG_DIR, `${slug}.md`);
     if (existsSync(path)) return res.status(409).json({ error: "exists" });
+    const desc = cleanDescriptor(descriptor);
     await writeBacklog(slug, emptyBacklog(slug));
+    await writeRuleStub(slug, desc);
     res.status(201).json(await getProject(slug));
   } catch (e) {
+    if (e.code === "BAD_DESCRIPTOR") return res.status(400).json({ error: e.message });
     next(e);
   }
 });
@@ -281,10 +308,11 @@ app.post("/api/sessions/:id/task", async (req, res, next) => {
 app.post("/api/sessions/:id/new-project", async (req, res, next) => {
   try {
     if (!SESSION_ID_RE.test(req.params.id)) return res.status(400).json({ error: "bad id" });
-    const slug = await sessionToNewProject(req.params.id, (req.body || {}).name);
+    const { name, descriptor } = req.body || {};
+    const slug = await sessionToNewProject(req.params.id, name, descriptor);
     res.status(201).json({ slug, ...(await listSessions()) });
   } catch (e) {
-    if (e.code === "BAD_SLUG") return res.status(400).json({ error: e.message });
+    if (e.code === "BAD_SLUG" || e.code === "BAD_DESCRIPTOR") return res.status(400).json({ error: e.message });
     if (e.code === "EXISTS") return res.status(409).json({ error: e.message });
     if (/no such session/.test(e.message)) return res.status(404).json({ error: e.message });
     next(e);

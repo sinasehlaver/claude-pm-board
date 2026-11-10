@@ -8,12 +8,78 @@ import { UnattendedToggle, loadUnattended } from "./relay.jsx";
 import { AutoToggle, AutoProjectToggle, toggleAuto, useFill } from "./fill.jsx";
 import { ColorPane, slugStyle, loadColor, saveColor, termBg } from "./projectColor.jsx";
 import { alertDialog, promptDialog } from "./dialog.jsx";
+import StartButton from "./StartButton.jsx";
 
 const STATES = ["Doing", "Todo", "Blocked", "Done"];
 const KIND = { commit: "●", handoff: "⇄", plan: "▤" };
 const EMPTY_RESUME = { lastResult: "", rerun: "", branch: "", artifacts: "" };
 // Done items before this date can be compacted (server: compact.mjs KEEP_DAYS = 7).
 const compactCutoff = () => new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+
+const VERDICTS = [
+  ["yes", "Has a business model"],
+  ["maybe", "Maybe"],
+  ["no", "No business model"],
+  ["personal", "Personal tool"],
+  ["public", "Public site"],
+];
+
+function Business({ slug, value, reload }) {
+  const [open, setOpen] = useState(false);
+  const save = async (verdict, note = "") => {
+    try {
+      await send("PUT", `/projects/${slug}/business`, { verdict, note });
+      setOpen(false);
+      reload();
+    } catch (e) {
+      alertDialog(e.message);
+    }
+  };
+  const pick = async (v) => {
+    const note = await promptDialog({ title: "Why? (optional)", value: value?.verdict === v ? value.note : "", confirmLabel: "Save" });
+    if (note === null || note === undefined) return;
+    save(v, String(note).slice(0, 600));
+  };
+  const label = VERDICTS.find(([v]) => v === value?.verdict)?.[1];
+  return (
+    <section className="block biz">
+      <div className="block-head">
+        <span className="block-head-title">
+          <h2>Business model</h2>
+          <Help text="Your verdict on whether this project could earn money. Set by you here, or by an idea-research session. Personal tools are marked so they aren't judged as businesses." />
+        </span>
+        <button className="link" onClick={() => setOpen(!open)}>
+          {open ? "close" : value ? "change" : "set"}
+        </button>
+      </div>
+      <p className="biz-line" onClick={() => setOpen(true)}>
+        {value ? (
+          <>
+            <span className={`biz-chip biz-${value.verdict}`}>{label}</span>
+            {value.note && <span className="muted small"> {value.note}</span>}
+            {value.at && <span className="muted small"> ({value.at})</span>}
+          </>
+        ) : (
+          <em className="muted">not judged yet</em>
+        )}
+      </p>
+      {open && (
+        <div className="biz-pick">
+          {VERDICTS.map(([v, l]) => (
+            <button key={v} className={`biz-chip biz-${v}`} onClick={() => pick(v)}>
+              {l}
+            </button>
+          ))}
+          {value && (
+            <button className="link" onClick={() => save(null)}>
+              clear
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
 export default function Project({ slug, data, projects, onBack, reload }) {
   const [editing, setEditing] = useState(false);
@@ -107,12 +173,19 @@ export default function Project({ slug, data, projects, onBack, reload }) {
           />
         }
       />
-      {data.description && <p className="proj-desc">{data.description}</p>}
+      {(data.description || data.hasStart) && (
+        <div className="proj-top">
+          <p className="proj-desc">{data.description}</p>
+          <StartButton p={data} reload={reload} />
+        </div>
+      )}
       {data.path && (
         <p className="muted small">
           {data.kind}: <PathText text={data.path} slug={slug} />
         </p>
       )}
+
+      {!isIdeas && <Business slug={slug} value={data.business} reload={reload} />}
 
       <section className="block">
         <div className="block-head">
@@ -174,7 +247,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
           </span>
           <span className="bar-item">
             <UnattendedToggle value={unattended} onChange={setUnattended} />
-            {!isIdeas && fill && <AutoProjectToggle slug={slug} on={autoProject} reload={reloadFill} />}
+            {fill && <AutoProjectToggle slug={slug} on={autoProject} reload={reloadFill} />}
             {openTitles.length > 1 && (
               <button
                 className="link"
@@ -255,7 +328,7 @@ export default function Project({ slug, data, projects, onBack, reload }) {
                     rec={tokens[slug]?.[t.title]}
                     pick={t.state === "Todo" || t.state === "Doing" ? { on: picked.has(t.title), toggle: () => togglePick(t.title) } : null}
                     auto={
-                      !isIdeas && fill && (t.state === "Todo" || t.state === "Doing")
+                      fill && (t.state === "Todo" || t.state === "Doing")
                         ? { on: autoProject || autoSet.has(t.title), viaProject: autoProject, toggle: () => toggleAuto(slug, t.title, !autoSet.has(t.title), reloadFill) }
                         : null
                     }

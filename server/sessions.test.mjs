@@ -86,8 +86,11 @@ test("moveTask relocates a bullet between backlog files", async () => {
 
 // ---- new-project scaffold ----------------------------------------------
 test("sessionToNewProject scaffolds files, files the session, seeds a Todo", async () => {
-  const slug = await s.sessionToNewProject("aaaa1111-2222-3333", "Cool App");
+  await assert.rejects(s.sessionToNewProject("aaaa1111-2222-3333", "Cool App"), { code: "BAD_DESCRIPTOR" });
+  assert.ok(!existsSync(join(root, "cool-app")));
+  const slug = await s.sessionToNewProject("aaaa1111-2222-3333", "Cool App", "a very cool app");
   assert.equal(slug, "cool-app");
+  assert.match(readFileSync(join(root, ".claude", "rules", "cool-app.md"), "utf8"), /^# cool-app\/ — a very cool app$/m);
   for (const p of ["cool-app/README.md", "cool-app/CONTEXT.md", ".claude/state/cool-app.md", ".claude/backlog/cool-app.md", ".claude/rules/cool-app.md"])
     assert.ok(existsSync(join(root, p)), p);
   assert.match(readFileSync(join(root, ".claude", "rules", "cool-app.md"), "utf8"), /## Run & verify/);

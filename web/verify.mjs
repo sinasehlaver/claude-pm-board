@@ -66,6 +66,17 @@ try {
   // Home "Latest todos" panel at phone width: list renders, add works, selection
   // flips the run button label, and nothing overflows horizontally.
   await page.setViewportSize({ width: 390, height: 844 });
+  // Card titles stay on one line at phone width, even with a descriptor at the 40-char limit.
+  const titleFit = await page.$$eval(".card-top .title-text", (els) => {
+    if (!els[0]) return { count: 0 };
+    const was = els[0].textContent;
+    els[0].textContent = "insta-reel-advisor/ — " + "x".repeat(40);
+    const top = els[0].closest(".card-top");
+    const r = { count: els.length, lines: els[0].getClientRects().length, tall: els[0].offsetHeight, over: top.scrollWidth - top.clientWidth, cut: els[0].scrollWidth > els[0].clientWidth };
+    els[0].textContent = was;
+    return r;
+  });
+  if (!titleFit.count || titleFit.lines !== 1 || titleFit.tall > 30 || titleFit.over > 0 || !titleFit.cut) fail(`card title wraps or overflows ${JSON.stringify(titleFit)}`);
   await page.waitForSelector(".lt-row");
   const ltBefore = await page.$$eval(".lt-row", (e) => e.length);
   if (!(await page.textContent(".lt-run-btn")).includes("Run all listed"))
@@ -119,10 +130,37 @@ try {
 
   await page.locator(".card", { hasText: "hub" }).first().click();
   await page.waitForSelector(".block");
+  // Start button on the project page: same control as the card, and it launches (dry run here).
+  const pageStart = page.locator(".proj-top .start-btn");
+  if (!(await pageStart.count())) fail("project page: no Start button for a project with start.sh");
+  else {
+    const started = page.waitForResponse((r) => r.url().endsWith("/api/projects/hub/start") && r.request().method() === "POST");
+    await pageStart.click();
+    if (!(await started).ok()) fail("project page: Start request failed");
+    await page.setViewportSize({ width: 390, height: 800 });
+    const box = await pageStart.boundingBox();
+    if (box.x < 0 || box.x + box.width > 390) fail("project page: Start button leaves a 390px screen");
+    if (process.env.PM_SHOT_PROJECT) await page.screenshot({ path: process.env.PM_SHOT_PROJECT + "-390.png" });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    if (process.env.PM_SHOT_PROJECT) { await page.waitForTimeout(600); await page.screenshot({ path: process.env.PM_SHOT_PROJECT + "-1280.png" }); }
+  }
   const heads = await page.$$eval(".block-head h2", (e) =>
     e.map((x) => x.textContent.toLowerCase()),
   );
   if (!heads.includes("backlog")) fail(`no Backlog block: ${heads}`);
+  // back from a project: its card is scrolled into view
+  await page.setViewportSize({ width: 1280, height: 520 });
+  await page.goBack();
+  await page.waitForSelector('.cards .card[data-slug="hub"]');
+  await page.waitForTimeout(900);
+  const inView = await page.evaluate(() => {
+    const r = document.querySelector('.cards .card[data-slug="hub"]').getBoundingClientRect();
+    return r.top >= 0 && r.bottom <= window.innerHeight;
+  });
+  if (!inView) fail("back from project: card not scrolled into view");
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.locator(".card", { hasText: "hub" }).first().click();
+  await page.waitForSelector(".block");
   if (!heads.includes("sessions")) fail(`no Sessions block: ${heads}`);
   const before = await page.$$eval(".tg .task", (e) => e.length);
 
@@ -219,9 +257,13 @@ try {
   await page.goto(BASE, { waitUntil: "networkidle" });
   await page.keyboard.press("Control+k");
   await page.waitForSelector(".pal-input", { timeout: 3000 }).catch(() => fail("palette: Ctrl+K did not open it"));
+  // wait for focus + the filtered row: on a busy Home (fill, cards) keystrokes typed before focus were lost (~1 in 5 runs)
+  await page.waitForFunction(() => document.activeElement?.classList.contains("pal-input"), null, { timeout: 3000 }).catch(() => {});
   await page.keyboard.type("doctor");
+  await page.waitForFunction(() => /doctor/i.test(document.querySelector(".pal-row.on")?.innerText || ""), null, { timeout: 3000 }).catch(() => {});
+  const palText = await page.evaluate(() => (document.querySelector(".pal-input")?.value || "") + " | " + (document.querySelector(".pal-list")?.innerText?.slice(0, 200) || ""));
   await page.keyboard.press("Enter");
-  await page.waitForFunction(() => location.pathname === "/doctor", null, { timeout: 3000 }).catch(() => fail(`palette: Enter did not navigate (${page.url()})`));
+  await page.waitForFunction(() => location.pathname === "/doctor", null, { timeout: 3000 }).catch(() => fail(`palette: Enter did not navigate (${page.url()}) [${palText.replace(/\s+/g, " ")}]`));
   if (await page.$(".pal-input")) fail("palette: should close after running a command");
 
   // help tooltips: portaled to <body>, fully inside the viewport (never clipped/covered by a panel)

@@ -26,10 +26,11 @@ and let them run unattended.
 - **Backlog** — Doing / Todo / Blocked / Done, with notes, and moving tasks between projects.
   Each todo has a checkbox to pick it for a batch.
 - **Build with Claude** — ▶ on a task opens a terminal running a seeded Claude Code session.
-  ▶ **start** on a project card runs that project's `start.sh` (when it has one).
+  ▶ **start** on a project card or project page runs that project's `start.sh` (when it has one).
 - **Run selected / Run all** — tick todos, then run the batch as one orchestrated session that
   fans out to subagents. Runs unattended by default and survives rate limits.
 - **Fill unused quota** — while you're away, todos (or whole projects) you marked "auto" run until today's share of your weekly limit is used.
+- **Back to Home** — returning from a project scrolls its card into view (only if it is off-screen) and flashes a brief accent ring.
 - **Latest todos** — a cross-project list on Home; tick any selection and run it in one go.
 - **Ideas inbox** — capture a one-liner; ▶ researches it and can promote it to a project.
 - **Sessions inbox** — Claude Code conversations harvested from disk; file them to a
@@ -163,8 +164,14 @@ overwrite) appends it to `backlog-archive/<slug>.md` (same bullet format plus a
 Restore (back to Todo). Every backlog write also keeps a snapshot of the previous file in
 `backlog-archive/.snapshots/<slug>.<timestamp>.md` (last 20 per project).
 `GET /api/projects/:slug/archive`, `POST /api/projects/:slug/archive/restore {title}`.
-`backlog-cli.mjs` is add/move/list (+ `compact`): `list <slug> [state]` is read-only, `add` refuses a
+`backlog-cli.mjs` is add/move/list/create (+ `compact`): `list <slug> [state]` is read-only, `add` refuses a
 duplicate exact title, `move` matches the exact title and never renames.
+
+**Descriptors.** Every new project needs a short descriptor of at most 40 characters, such as "band merch demand
+tracker". The board asks for it when you create a project, and `backlog-cli.mjs create <slug> "<descriptor>" …`
+takes it as the first argument after the slug. It's stored in the heading of `.claude/rules/<slug>.md`
+(`# <slug>/ — <descriptor>`) and shown as the card title. To change one, edit that heading. A title too wide for
+a narrow screen is cut with an ellipsis, and hovering shows the full text.
 
 **Compact Done.** When a project has Done items older than 7 days, the Done header shows a
 **Compact** button. It opens a Claude Code session running the bundled
@@ -178,6 +185,10 @@ back to state and backlog when done. That is what keeps the board live rather th
 The server watches those files and pushes a ping over one SSE stream, which all open board
 tabs share, so any number of tabs stay live. Requests time out after 20s with an error
 instead of hanging.
+
+### Business-model verdict
+
+Each project page (not Ideas) has a **Business model** block: `Has a business model`, `Maybe`, `No business model`, `Personal tool` or `Public site` (a hobby site meant for everyone), plus an optional one-line reason and the date. Click *set*/*change*, pick a verdict, add a note. It is your call, pm judges nothing; it is stored in `business.json` in the pm dir and written through `PUT /api/projects/:slug/business` (loopback or `PM_TOKEN`).
 
 ### Backlog format
 
@@ -239,7 +250,7 @@ from a subfolder when this was added).
 
 ### Model
 
-Setup → **Model** picks the model for pm's launches: default (Claude Code's own), Opus, Sonnet or Haiku.
+Setup → **Model** picks the model for pm's launches: default (Claude Code's own), Opus, Sonnet or Haiku. It is a colour-coded button row (green Haiku $, amber Sonnet $$, red Opus $$$, grey default), so the cost of a launch is visible at a glance.
 It is saved once in `.claude/pm/prefs.json` (`model`), so the same choice applies to single ▶, Run selected /
 Run all and unattended runs. The same picker sits beside **▶▶ Run in Project** and in Latest todos. It writes
 that same global setting, so changing it in one place changes it everywhere. Resumed sessions keep the model
@@ -285,8 +296,15 @@ listed) and press **▶▶ Run selected**.
 Batch runs go through a relay unless you untick **Unattended**. It runs the orchestrator
 headless (`claude -p`, `acceptEdits`, `Bash(git *)` denied) and:
 
-- on a rate-limit rejection — or 5-hour usage ≥ 95% / 7-day ≥ 97% — sleeps until the
-  reset (+90 s), then resumes the same session;
+- near a limit (5-hour usage ≥ 90% or 7-day ≥ 95%) it asks the session for a short plain-text
+  handoff, saves it to `.claude/pm/relay/<id>.handoff.md` (built from the job state if the session
+  can't write one), then sleeps until the reset (+90 s) and starts a **fresh** session with the
+  original brief, the handoff and the open todos. Resuming after a reset would re-read the whole
+  old context uncached, which is why it does not resume. The handoff is not live-tested against
+  real Claude Code yet. `PM_RELAY_HANDOFF=0` turns it off (thresholds: `PM_RELAY_HANDOFF_5H`,
+  `PM_RELAY_HANDOFF_7D`);
+- on a plain rate-limit rejection (or with the handoff off), sleeps until the reset (+90 s), then
+  resumes the same session (5-hour ≥ 95% / 7-day ≥ 97% stop as before);
 - decides what's left by re-reading the backlog and matching todos **by title**, and
   nudges a stalled agent a few times before reporting **stalled**;
 - shows the agent's latest actions (file read/edited, command, subagent task) on the running row;
@@ -294,7 +312,8 @@ headless (`claude -p`, `acceptEdits`, `Bash(git *)` denied) and:
   ✕ to dismiss finished rows;
 - edits backlog and state through one allowlisted helper, `server/backlog-cli.mjs`,
   because headless Claude Code cannot edit anything under `.claude/`. So an unattended
-  run can't hand-edit `rules/*.md` or promote ideas — use the interactive path for those.
+  run can't hand-edit `rules/*.md`. Ideas can still be promoted: a relay run writes research to
+  `knowledge/` and does the bookkeeping through the same helper (see Ideas inbox).
 - starts lean: no MCP servers, no skill list unless a todo mentions a skill (`--strict-mcp-config --disable-slash-commands`,
   first turn ~14k tokens instead of ~23k), and a system-prompt line asking for no
   narration and a ≤8-line final report.
@@ -313,7 +332,7 @@ Tunables (env): `PM_RELAY_STOP_5H` (0.95), `PM_RELAY_STOP_7D` (0.97),
 
 Mark a todo **auto** (the pill on its row, on the project page or in Home's Latest todos), or tick **Auto project** on a project's Backlog to
 hand over every open todo there, including todos added later (by you or by a run): each pass
-re-reads the backlog, so new ones join the next run. Each Home card has an **auto** pill too: click it to make the whole project auto (filled = on, `auto N` = N todos marked one by one). To see everything that's auto and unselect it, click the **N auto todos** count in the Fill panel on Home. Then turn on **Fill unused quota** on Home. While
+re-reads the backlog, so new ones join the next run. Each Home card has an **auto** pill too: click it to make the whole project auto (filled = on, `auto N` = N todos marked one by one). To see everything that's auto and unselect it, click the **N auto todos** count in the Fill panel on Home. Ideas can be auto too, on the Ideas page or its rows and from the Ideas pill on Home. Then turn on **Fill unused quota** on Home. While
 you're away (no keyboard/mouse input for the idle time you set, default 20 min; pm running, Mac
 awake), pm starts unattended relay runs over the auto todos, a few at a time, until today's
 share of your weekly limit is used:
@@ -342,6 +361,17 @@ pm's own status line does this for you: tick "Also save rate limits for Fill" in
 With no numbers yet, the first run takes a single todo to learn them. A todo that two fill runs
 didn't finish (stalled, failed or stopped) is skipped for a week. The idle check is macOS-only
 (`ioreg`); on Windows/Linux pm treats you as idle, so set the timer accordingly or use Fill now.
+
+## Handoff before the usage limit (interactive, opt-in)
+
+Setup → **Handoff before usage limit** adds a Claude Code hook (`hooks/limit-handoff.mjs`, on
+`UserPromptSubmit` and `PostToolUse`). It reads `~/.claude/rate-limits.json` (or `PM_RATE_LIMITS_FILE`),
+and at the same thresholds as the relay it tells the open session once per window to run the
+`handoff` skill and to tell you to `/clear` and paste the starter after the reset. It needs the
+status line saving rate limits (see Fill). The card writes only its own `hooks` entries in
+`~/.claude/settings.json` (`PM_CLAUDE_DIR` overrides the folder), keeps a `.bak-<ts>` copy first, and
+turning it off removes only the entries that name `limit-handoff.mjs`. Not browser-checked and not
+live-tested yet.
 
 ## Command palette (⌘K)
 
@@ -372,13 +402,28 @@ otherwise `prospector` checks whether to adopt an existing tool or build.
   and atelier confirms it: a **project**, a **tool** (single-purpose, about one session; still a
   full project, plus an `entries.json` row so it sits in the Projects tab's "tools" group), or a
   **pm feature** (a part of pm itself — no project, one todo in pm's backlog). ▶ researches and
-  promotes the idea (state + backlog, no code). ▶▶ also scaffolds `PM_ROOT/<slug>/` and builds.
+  promotes the idea (state + backlog, no code).
+
+**▶▶ Run selected / Run all** on the Ideas page runs the ticked ideas as one orchestrated session.
+The session knows the ideas are independent, not todos of one project: it starts one subagent per
+idea (at most three at a time), and each subagent gets exactly the brief a single ▶ would. Nothing
+is scaffolded under `PM_ROOT/<slug>/` and nothing is built. Interactive runs batch their questions
+into one `AskUserQuestion` round; unattended (relay) runs record their assumptions instead. The
+session ends with one line per idea: research-only, adopt, business, or promoted to `<slug>`.
 
 Todos written by Claude read like todos you'd write: one per checkpoint ("Build block A, tell
 me how to test it, and wait for me to test it"), not one per internal phase. The phase list lives
 in the plan and the project's state `Next`.
 
 Use ▸ to move an idea to an existing project by hand.
+
+**Auto ideas** (Fill) run headless, in the same way. Research writes `knowledge/…`. The bookkeeping
+goes only through `backlog-cli`: Build or Adopt + extend creates the project card and moves the idea
+to Done as "promoted to `<slug>`"; a pm feature adds one todo to pm's backlog; research-only moves the
+idea to Done with a note; adopt and business move it back to Todo with a note. An idea that comes out
+as a tool cannot get its `entries.json` row written unattended, and the agent says so in its report.
+A batch that mixes todos and ideas is one prompt: todos first, then ideas. Ideas stay out of Latest todos and the
+cross-project run.
 
 ### Sessions inbox
 

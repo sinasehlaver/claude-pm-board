@@ -7,6 +7,7 @@ import { join } from "node:path";
 const root = mkdtempSync(join(tmpdir(), "pm-test-"));
 const c = join(root, ".claude");
 for (const d of ["rules", "state", "backlog", "pm", "handoffs"]) mkdirSync(join(c, d), { recursive: true });
+mkdirSync(join(root, "hub")); // ad-hoc = no project dir
 writeFileSync(join(c, "rules", "hub.md"), "# hub — rules\n");
 writeFileSync(join(c, "rules", "agent.md"), "# agent — rules\n");
 writeFileSync(join(c, "state", "hub.md"), "# hub — state\nUpdated: 2026-09-07\n\n## Now\n- [ ] ship it\n\n## Blockers\nnone\n");

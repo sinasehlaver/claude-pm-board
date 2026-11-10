@@ -239,8 +239,11 @@ body { overflow-x: clip; }
 }
 .card:hover { box-shadow: var(--shadow-md); border-color: color-mix(in srgb, var(--line) 50%, var(--accent)); }
 .card:active { transform: scale(0.985); box-shadow: var(--shadow-sm); }
-.card-top { display: flex; align-items: center; justify-content: space-between; }
+.card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .title { font-family: var(--font-display); font-weight: 600; font-size: 16px; letter-spacing: -0.005em; }
+.card-top .title { display: flex; align-items: center; min-width: 0; }
+.title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-top .tag, .card-top .card-color { flex-shrink: 0; }
 .tag {
   margin-left: 8px; font-size: 11px; font-weight: 600; color: var(--muted);
   border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px;
@@ -282,6 +285,9 @@ body { overflow-x: clip; }
 .desc { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
 .desc + .status { margin-top: 8px; }
 .proj-desc { margin: 4px 16px 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.proj-top { display: flex; align-items: flex-start; gap: 12px; margin-top: 10px; }
+.proj-top .proj-desc { flex: 1; min-width: 0; }
+.proj-top .start-wrap { flex: none; margin-right: 12px; }
 .status { margin: 6px 0 8px; color: var(--text); }
 .meta { display: flex; gap: 14px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 
@@ -1071,7 +1077,21 @@ h2.tg-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3
 .sl-move { display: inline-flex; gap: 4px; }
 .sl-sep { width: 6em; margin-left: 6px; }
 .srow.model-pick { margin-top: 0; }
-.model-pick select { padding: 3px 7px; font-size: 12px; }
+.mp-seg { display: inline-flex; gap: 4px; padding: 3px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-sm); }
+.mp-opt { --c: var(--muted, #888); display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; font-size: 13px; font-weight: 600; border-radius: 999px; border: 1.5px solid transparent; background: transparent; color: var(--text, inherit); cursor: pointer; transition: background .22s, border-color .22s, transform .16s, color .22s; }
+.mp-opt small { font-size: 11px; opacity: .8; letter-spacing: .05em; }
+.mp-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+.mp-opt:hover { border-color: var(--c); }
+.mp-opt:active { transform: scale(.96); }
+.mp-opt:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+.mp-opt.on { background: var(--c); border-color: var(--c); color: #fff; }
+.mp-opt.on .mp-dot { background: #fff; }
+.mp-cheap { --c: #17944f; }
+.mp-mid { --c: #c98a00; }
+.mp-high { --c: #e5383d; }
+.mp-default { --c: #6b7280; }
+.mp-opt.on.mp-mid { color: #1a1300; }
+.mp-opt.on.mp-mid .mp-dot { background: #1a1300; }
 
 /* command palette */
 .pal-backdrop { z-index: 90; align-items: flex-start; padding-top: 12vh; }
@@ -1105,3 +1125,7 @@ h2.tg-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3
 .cc-head:hover { background: var(--accent-tint); }
 .cc-chev { display: inline-block; font-size: 12px; color: var(--accent); transition: transform 0.16s var(--ease); }
 .cc-chev.open { transform: rotate(90deg); }
+
+.card-return { animation: card-return 1.5s ease-out; }
+@keyframes card-return { 0%, 40% { box-shadow: 0 0 0 3px var(--accent), var(--shadow-md); } 100% { box-shadow: 0 0 0 3px transparent; } }
+@media (prefers-reduced-motion: reduce) { .card-return { animation: none; box-shadow: 0 0 0 3px var(--accent); } }

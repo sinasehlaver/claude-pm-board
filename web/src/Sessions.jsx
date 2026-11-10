@@ -48,8 +48,10 @@ export default function Sessions({ data, projects, onBack, reload }) {
 function Row({ s, slugs, reload, filed }) {
   const [pick, setPick] = useState(s.project || "");
   const [name, setName] = useState("");
+  const [descriptor, setDescriptor] = useState("");
   const isNew = pick === NEW;
-  const create = () => call("POST", `/sessions/${s.id}/new-project`, { name });
+  const ready = name.trim() && descriptor.trim();
+  const create = () => call("POST", `/sessions/${s.id}/new-project`, { name, descriptor });
   const call = async (method, path, body) => {
     try {
       await send(method, path, body);
@@ -94,9 +96,16 @@ function Row({ s, slugs, reload, filed }) {
               placeholder="new project name"
               autoFocus
               onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && name.trim() && create()}
+              onKeyDown={(e) => e.key === "Enter" && ready && create()}
             />
-            <button disabled={!name.trim()} onClick={create}>
+            <input
+              value={descriptor}
+              placeholder="what is it, in a few words"
+              maxLength={40}
+              onChange={(e) => setDescriptor(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && ready && create()}
+            />
+            <button disabled={!ready} onClick={create}>
               create + file
             </button>
           </>
