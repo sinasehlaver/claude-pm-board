@@ -164,14 +164,14 @@ test("launchClaude dryrun builds a resume command", async () => {
   const r = await launchClaude({ cwd: "/tmp", resumeId: "abcd-1234" });
   assert.equal(r.dryrun, true);
   // default provider is plain Claude Code: no OpenRouter env vars, no --model flag
-  assert.match(r.cmd, /^cd '\/tmp' && (arch -arm64 )?claude --resume 'abcd-1234'$/);
+  assert.match(r.cmd, /^cd '\/tmp' && CLAUDE_CODE_SUBAGENT_MODEL=sonnet (arch -arm64 )?claude --resume 'abcd-1234'$/);
   assert.equal(r.term, "terminal");
   assert.ok(r.osa.includes('tell application "Terminal"'));
 });
 
 test("launchClaude dryrun writes the prompt to a file, not the command line", async () => {
   const r = await launchClaude({ cwd: "/tmp", prompt: 'weird "quotes" and $(rm -rf /) here' });
-  assert.match(r.cmd, /^cd '\/tmp' && (arch -arm64 )?claude "\$\(cat '\/.*prompt\.txt'\)"$/);
+  assert.match(r.cmd, /^cd '\/tmp' && CLAUDE_CODE_SUBAGENT_MODEL=sonnet (arch -arm64 )?claude --model 'sonnet' "\$\(cat '\/.*prompt\.txt'\)"$/);
   assert.doesNotMatch(r.cmd, /rm -rf/); // prompt text never on the command line
 });
 
@@ -292,6 +292,9 @@ test("model pref adds --model to the interactive launch and the relay spec; defa
   const rr = await launchRelay({ prompt: "x", label: "l", tasks: [] });
   const spec = JSON.parse(readFileSync(rr.cmd.match(/'([^']+\.spec\.json)'/)[1], "utf8"));
   assert.equal(spec.modelArg, "sonnet");
+  assert.deepEqual(spec.modelEnv, { CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" });
+  assert.equal(spec.maxBudgetUsd, 25);
+  assert.match(r.cmd, /CLAUDE_CODE_SUBAGENT_MODEL=sonnet /);
   savePrefs({ model: "default" });
   assert.doesNotMatch((await launchClaude({ prompt: "hi" })).cmd, /--model/);
 });

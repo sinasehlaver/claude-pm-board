@@ -28,11 +28,28 @@ test("savePrefs refuses a path that isn't a detected install; null = PATH defaul
 
 test("model pref: whitelist-validated, merged without losing claudeBin, drives modelArg", async () => {
   const { modelArg, readPrefs } = await import("./setup.mjs");
-  assert.equal(modelArg(), null);
+  assert.equal(modelArg(), "sonnet"); // no pick saved = sonnet, never the account default
+  assert.equal(setupStatus().prefs.maxBudgetUsd, 25);
   assert.throws(() => savePrefs({ model: "gpt-9; rm -rf /" }), /unknown model/);
   savePrefs({ model: "opus" });
   assert.equal(modelArg(), "opus");
   assert.equal(readPrefs().claudeBin, null);
   savePrefs({ model: "default" });
   assert.equal(modelArg(), null);
+  savePrefs({ model: "fable" });
+  assert.equal(modelArg(), "fable");
+  assert.throws(() => savePrefs({ maxBudgetUsd: -1 }), /bad maxBudgetUsd/);
+  assert.throws(() => savePrefs({ maxBudgetUsd: "5" }), /bad maxBudgetUsd/);
+  savePrefs({ maxBudgetUsd: null });
+  assert.equal(setupStatus().prefs.maxBudgetUsd, null);
+  assert.equal(readPrefs().model, "fable"); // budget save kept the model
+});
+
+test("resolvedDefault reads ANTHROPIC_MODEL, then ~/.claude/settings.json", async () => {
+  const { resolvedDefault } = await import("./setup.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "pm-cdir-"));
+  assert.deepEqual(resolvedDefault({ PM_CLAUDE_DIR: dir }), { model: null, from: null });
+  writeFileSync(join(dir, "settings.json"), JSON.stringify({ model: "opus" }));
+  assert.equal(resolvedDefault({ PM_CLAUDE_DIR: dir }).model, "opus");
+  assert.equal(resolvedDefault({ PM_CLAUDE_DIR: dir, ANTHROPIC_MODEL: "fable" }).model, "fable");
 });

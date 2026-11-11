@@ -114,12 +114,12 @@ test("GET /api/todos/latest returns the proxy-ordered list", async () => {
   assert.ok(["slug", "id", "title", "note", "seq", "priority"].every((k) => k in d[0]));
 });
 
-test("POST /api/tasks/run-cross defaults to the unattended relay (dryrun)", async () => {
+test("POST /api/tasks/run-cross {unattended:true} starts the unattended relay (dryrun)", async () => {
   const l = await (await fetch(B + "/api/todos/latest")).json();
   const items = l
     .filter((t) => ["pm first", "hub second"].includes(t.title))
     .map(({ slug, id, title }) => ({ slug, id, title }));
-  const r = await post("/api/tasks/run-cross", { items });
+  const r = await post("/api/tasks/run-cross", { unattended: true, items });
   assert.equal(r.status, 200);
   const d = await r.json();
   assert.equal(d.relay, true);
@@ -133,12 +133,12 @@ test("POST /api/tasks/run-cross defaults to the unattended relay (dryrun)", asyn
   assert.deepEqual(await (await fetch(B + "/api/relay")).json(), []);
 });
 
-test("POST /api/tasks/run-cross {unattended:false} launches one interactive root-cwd session (dryrun)", async () => {
+test("POST /api/tasks/run-cross defaults to one interactive root-cwd session (dryrun)", async () => {
   const l = await (await fetch(B + "/api/todos/latest")).json();
   const items = l
     .filter((t) => ["pm first", "hub second"].includes(t.title))
     .map(({ slug, id, title }) => ({ slug, id, title }));
-  const r = await post("/api/tasks/run-cross", { unattended: false, items: [...items, { slug: "ideas", id: 0 }] });
+  const r = await post("/api/tasks/run-cross", { items: [...items, { slug: "ideas", id: 0 }] });
   assert.equal(r.status, 200);
   const d = await r.json();
   assert.equal(d.ok, true);
@@ -146,7 +146,7 @@ test("POST /api/tasks/run-cross {unattended:false} launches one interactive root
   assert.equal(d.count, 2);
   assert.equal(d.projects, 2);
   assert.equal(d.skipped, 1);
-  assert.match(d.cmd, /cd '\/.*' && (arch -arm64 )?claude "\$\(cat '\/.*prompt\.txt'\)"/, d.cmd);
+  assert.match(d.cmd, /cd '\/.*' && CLAUDE_CODE_SUBAGENT_MODEL=sonnet (arch -arm64 )?claude --model 'sonnet' "\$\(cat '\/.*prompt\.txt'\)"/, d.cmd);
   // the seed prompt was written to a file, ideas excluded from it
   const seedPath = d.cmd.match(/cat '([^']+)'/)[1];
   const prompt = readFileSync(seedPath, "utf8");

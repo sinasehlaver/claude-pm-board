@@ -91,22 +91,66 @@ export function checks(claudes = findClaudes()) {
 export function setupStatus() {
   const claudes = findClaudes();
   const prefs = readPrefs();
-  return { firstRun: !existsSync(PREFS()), prefs, claudes, checks: checks(claudes), appleSilicon: APPLE_SILICON };
+  return {
+    firstRun: !existsSync(PREFS()),
+    prefs: { ...prefs, model: pickedModel(), maxBudgetUsd: maxBudgetUsd() },
+    resolvedDefault: resolvedDefault(),
+    claudes,
+    checks: checks(claudes),
+    appleSilicon: APPLE_SILICON,
+  };
 }
 
-export const MODELS = ["default", "opus", "sonnet", "haiku"];
+export const MODELS = ["default", "fable", "opus", "sonnet", "haiku"];
+// No pick saved = sonnet, not "default": Claude Code's own default can be the priciest model,
+// and an unattended run inherits it for every subagent.
+export const DEFAULT_MODEL = "sonnet";
+// Model for every subagent of a pm launch (CLAUDE_CODE_SUBAGENT_MODEL), whatever the orchestrator runs on.
+export const SUBAGENT_MODEL = "sonnet";
+// Per relay job, summed over every resume; null = no cap.
+export const DEFAULT_MAX_BUDGET_USD = 25;
+
+const pickedModel = () => {
+  const m = readPrefs().model;
+  return MODELS.includes(m) ? m : DEFAULT_MODEL;
+};
 
 // `--model` alias for launches; null = no flag (claude's own default).
 export function modelArg() {
-  const m = readPrefs().model;
-  return MODELS.includes(m) && m !== "default" ? m : null;
+  const m = pickedModel();
+  return m !== "default" ? m : null;
+}
+
+export function maxBudgetUsd() {
+  const p = readPrefs();
+  return "maxBudgetUsd" in p ? p.maxBudgetUsd : DEFAULT_MAX_BUDGET_USD;
+}
+
+const validBudget = (v) => v === null || (typeof v === "number" && Number.isFinite(v) && v > 0 && v <= 10000);
+
+// What "default" actually runs: ANTHROPIC_MODEL, else `model` in ~/.claude/settings.json; null = the account's own default.
+export function resolvedDefault(env = process.env) {
+  if (env.ANTHROPIC_MODEL) return { model: env.ANTHROPIC_MODEL, from: "ANTHROPIC_MODEL" };
+  try {
+    const m = JSON.parse(readFileSync(join(env.PM_CLAUDE_DIR || join(homedir(), ".claude"), "settings.json"), "utf8")).model;
+    if (typeof m === "string" && m) return { model: m, from: "~/.claude/settings.json" };
+  } catch {}
+  return { model: null, from: null };
 }
 
 // Merges into the saved prefs: a key left out is kept. claudeBin only accepts a path
 // findClaudes() returned (or null = PATH default); model only a MODELS entry.
 export function savePrefs(patch = {}) {
   const cur = readPrefs();
-  const next = { claudeBin: cur.claudeBin ?? null, model: MODELS.includes(cur.model) ? cur.model : "default" };
+  const next = { claudeBin: cur.claudeBin ?? null, model: pickedModel(), maxBudgetUsd: maxBudgetUsd() };
+  if ("maxBudgetUsd" in patch) {
+    if (!validBudget(patch.maxBudgetUsd)) {
+      const e = new Error("bad maxBudgetUsd");
+      e.status = 400;
+      throw e;
+    }
+    next.maxBudgetUsd = patch.maxBudgetUsd;
+  }
   if ("claudeBin" in patch) {
     const b = patch.claudeBin;
     if (b !== null && !findClaudes().some((c) => c.path === b)) {

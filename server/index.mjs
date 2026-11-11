@@ -37,9 +37,9 @@ const SESSION_ID_RE = /^[a-f0-9][a-f0-9-]{7,}$/i;
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 const hasToken = (req) => tokenMatches(req.query.token, TOKEN) || tokenMatches(req.get("x-pm-token"), TOKEN);
 const canLaunch = (req) => LOOPBACK.has(req.ip) || hasToken(req);
-// Batch runs (run-seq / run-cross) default to the unattended relay; `{unattended:false}`
-// opts back into a plain interactive session.
-const unattended = (req) => (req.body || {}).unattended !== false;
+// Batch runs (run-seq / run-cross) are interactive unless the body opts in with `{unattended:true}`:
+// an unattended relay keeps spending all night, so it is never the default.
+const unattended = (req) => (req.body || {}).unattended === true;
 
 const app = express();
 app.use(express.json());

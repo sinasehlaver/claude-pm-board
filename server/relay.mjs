@@ -51,7 +51,13 @@ export function relayConfig(env = process.env) {
 
 // ---------- pure logic (unit-tested) --------------------------------------
 
-export const emptyRun = () => ({ sessionId: null, windows: {}, rejected: null, result: null, lastText: "" });
+export const emptyRun = () => ({ sessionId: null, windows: {}, rejected: null, result: null, lastText: "", costUsd: 0 });
+
+// Job-wide spend cap: spec.maxBudgetUsd (null/absent = none) minus what earlier runs of this job spent.
+export function budgetLeft(spec, spentUsd) {
+  const cap = spec?.maxBudgetUsd;
+  return typeof cap === "number" && cap > 0 ? Math.max(0, cap - (spentUsd || 0)) : null;
+}
 
 const frac = (u) => (typeof u !== "number" ? 0 : u > 1 ? u / 100 : u);
 
@@ -70,6 +76,7 @@ export function foldEvent(st, ev) {
     if (t) st.lastText = t;
   } else if (ev.type === "result") {
     st.result = { isError: !!ev.is_error, text: String(ev.result ?? ""), subtype: ev.subtype || "" };
+    if (typeof ev.total_cost_usd === "number") st.costUsd = ev.total_cost_usd;
   }
   return st;
 }
@@ -359,7 +366,7 @@ export const QUIET_NOTE =
   "Tool names are case-sensitive: call `Bash`, `Read`, `Edit`, never `bash`.";
 
 // One child run. Resolves { st, softStopped } once claude has exited.
-function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note, noStops = false }) {
+function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note, noStops = false, budget = null }) {
   const args = [
     "-p",
     "--output-format", "stream-json",
@@ -375,6 +382,7 @@ function runChild({ cfg, spec, prompt, resumeId, onEvent, onChild, note, noStops
   if (!/skill/i.test(spec.prompt || "")) args.push("--disable-slash-commands");
   args.push(...settingsArgs());
   if (spec.modelArg) args.push("--model", spec.modelArg);
+  if (budget !== null) args.push("--max-budget-usd", budget.toFixed(2));
   if (resumeId) args.push("--resume", resumeId);
   const child = spawn(cfg.claudeBin, args, {
     cwd: spec.cwd,
@@ -588,11 +596,15 @@ export async function runRelay(specPath, env = process.env) {
       },
       onChild: (ch) => (current = ch),
       note: log,
+      budget: budgetLeft(spec, job.costUsd),
     });
     current = null;
     const { st, filled, handoffStopped } = run;
     let softStopped = run.softStopped;
+    job.costUsd = (job.costUsd || 0) + st.costUsd;
     if (stopping) return stopped();
+    if (budgetLeft(spec, job.costUsd) === 0 || st.result?.subtype === "error_max_budget_usd")
+      return finish("budget", `spend cap $${spec.maxBudgetUsd} reached ($${job.costUsd.toFixed(2)} spent), ${open.length} todo(s) left`);
     if (st.sessionId) {
       resumeId = st.sessionId;
       job.sessionId = st.sessionId;
@@ -612,6 +624,7 @@ export async function runRelay(specPath, env = process.env) {
           onEvent: (ev) => echo(ev),
         });
         current = null;
+        job.costUsd += h.st.costUsd;
         if (stopping) return stopped();
         if (!h.st.rejected && h.st.result && !h.st.result.isError) text = h.st.result.text.trim();
         if (h.st.sessionId) job.sessionId = h.st.sessionId;

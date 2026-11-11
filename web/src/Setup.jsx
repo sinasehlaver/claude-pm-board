@@ -92,8 +92,8 @@ export default function Setup({ onBack, onSaved }) {
             <div className="doc-card-head" style={{ cursor: "default" }}>
               <span className="doc-title">Model</span>
             </div>
-            <p className="doc-suggest muted">Passed as --model to new sessions and unattended runs. Default = Claude Code's own choice.</p>
-            <ModelPick />
+            <p className="doc-suggest muted">Passed as --model to new sessions and unattended runs. Sonnet unless you pick another; "default" = whatever Claude Code itself would use.</p>
+            <ModelPick full />
           </li>
           <StatusLine />
           <LimitHook />

@@ -104,12 +104,11 @@ try {
   if (dialog) fail(`latest todos: run opened a blocking dialog: ${dialog}`);
   if (!(await page.$(".lt-notice"))) fail("latest todos: run showed no inline notice");
   await page.locator(".lt-row").first().click(); // re-select for the checks below
-  // unattended relay: toggle defaults on + persists; a waiting job shows its resume time
+  // unattended relay: toggle defaults off + persists; a waiting job shows its resume time
   const toggle = page.locator(".lt-run .relay-toggle input");
-  if (!(await toggle.isChecked())) fail("relay: Unattended should default to on");
-  await toggle.uncheck();
-  if ((await page.evaluate(() => localStorage.getItem("pm.unattended"))) !== "0") fail("relay: toggle not persisted");
+  if (await toggle.isChecked()) fail("relay: Unattended should default to off");
   await toggle.check();
+  if ((await page.evaluate(() => localStorage.getItem("pm.unattended"))) !== "1") fail("relay: toggle not persisted");
   await page.waitForSelector(".relay-row");
   const relayText = await page.textContent(".relay-strip");
   if (!/waiting/.test(relayText) || !/resumes/.test(relayText) || !/2 left/.test(relayText))

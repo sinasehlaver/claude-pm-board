@@ -1089,6 +1089,11 @@ h2.tg-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3
 .mp-cheap { --c: #17944f; }
 .mp-mid { --c: #c98a00; }
 .mp-high { --c: #e5383d; }
+.mp-top { --c: #a3125a; }
+@media (max-width: 520px) {
+  .mp-opt { padding: 4px 7px; gap: 4px; font-size: 12px; }
+  .mp-opt small { display: none; }
+}
 .mp-default { --c: #6b7280; }
 .mp-opt.on.mp-mid { color: #1a1300; }
 .mp-opt.on.mp-mid .mp-dot { background: #1a1300; }

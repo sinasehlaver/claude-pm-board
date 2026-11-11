@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { get, send, onStream } from "./api";
 import Help from "./Help.jsx";
 
-// Batch runs (Run all / Run @seq / Home "Run selected") default to the unattended
-// relay — headless claude that auto-resumes after every rate-limit reset. This flag
+// Batch runs (Run all / Run selected) can opt into the unattended relay: headless claude that
+// auto-resumes after every rate-limit reset. Off unless ticked (it spends unsupervised). This flag
 // is shared by every run button and persisted, so the choice sticks.
 export const UNATTENDED_KEY = "pm.unattended";
-export const loadUnattended = () => localStorage.getItem(UNATTENDED_KEY) !== "0";
+export const loadUnattended = () => localStorage.getItem(UNATTENDED_KEY) === "1";
 export const saveUnattended = (v) => localStorage.setItem(UNATTENDED_KEY, v ? "1" : "0");
 
 export function launchNotice(r, what) {
@@ -43,6 +43,7 @@ const STATUS_LABEL = {
   stalled: "stalled",
   failed: "failed",
   stopped: "stopped",
+  budget: "spend cap hit",
   dead: "not running",
 };
 const LIVE = new Set(["running", "waiting"]);

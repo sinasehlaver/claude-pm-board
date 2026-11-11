@@ -73,6 +73,12 @@ npm run verify   # temp fixture workspace + browser check; needs a browser-check
   is the single selector.
 - **Never write to a real `.claude/` in tests.** Tests and `verify` set `PM_ROOT` to a temp
   dir before importing anything from `server/paths.mjs`.
+- **Cost guards — don't weaken them** (a user's night run on an unpinned default model with inherited
+  subagents cost $100+): no saved model = `sonnet` (`DEFAULT_MODEL`, `server/setup.mjs`), never Claude Code's default;
+  every launch sets `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` (terminal command prefix + relay `spec.modelEnv`); batch runs are
+  interactive unless the body says `unattended:true` (UI toggle off by default, localStorage `pm.unattended === "1"`);
+  relay jobs carry `spec.maxBudgetUsd` (prefs, default 25, `null` = none), summed from `total_cost_usd` across resumes,
+  passed as `--max-budget-usd <remaining>`, job ends `budget`. Fill stays `enabled:false` by default.
 - **Unattended relay** (`server/relay.mjs`): headless `claude -p`. Edit/Write under
   `.claude/**` is hard-blocked there, so agents change backlog/state only via
   `server/backlog-cli.mjs` (the single allowlisted command). `Bash(git *)` stays denied;

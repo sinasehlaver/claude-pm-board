@@ -28,7 +28,7 @@ and let them run unattended.
 - **Build with Claude** — ▶ on a task opens a terminal running a seeded Claude Code session.
   ▶ **start** on a project card or project page runs that project's `start.sh` (when it has one).
 - **Run selected / Run all** — tick todos, then run the batch as one orchestrated session that
-  fans out to subagents. Runs unattended by default and survives rate limits.
+  fans out to subagents. Can run unattended (opt-in) and survive rate limits.
 - **Fill unused quota** — while you're away, todos (or whole projects) you marked "auto" run until today's share of your weekly limit is used.
 - **Back to Home** — returning from a project scrolls its card into view (only if it is off-screen) and flashes a brief accent ring.
 - **Latest todos** — a cross-project list on Home; tick any selection and run it in one go.
@@ -250,7 +250,13 @@ from a subfolder when this was added).
 
 ### Model
 
-Setup → **Model** picks the model for pm's launches: default (Claude Code's own), Opus, Sonnet or Haiku. It is a colour-coded button row (green Haiku $, amber Sonnet $$, red Opus $$$, grey default), so the cost of a launch is visible at a glance.
+Setup → **Model** picks the model for pm's launches: default (Claude Code's own), Fable, Opus, Sonnet or Haiku. It is a colour-coded button row (green Haiku $, amber Sonnet $$, red Opus $$$, crimson Fable $$$$, grey default), so the cost of a launch is visible at a glance.
+With nothing saved it is **Sonnet**. "default" passes no `--model`, and the card shows what that resolves to
+(`ANTHROPIC_MODEL`, else `model` in `~/.claude/settings.json`, else your account's default, which can be the priciest model).
+**Subagents always run on Sonnet**: every launch sets `CLAUDE_CODE_SUBAGENT_MODEL=sonnet`, so a fan-out never multiplies
+an expensive main model. The same card holds the **unattended spend cap** (`maxBudgetUsd`, default $25 per relay job,
+summed over every resume; empty = no cap). The relay passes the remainder as `--max-budget-usd` and ends the job
+"spend cap hit" once it is used up. The figure is Claude Code's own `total_cost_usd` estimate.
 It is saved once in `.claude/pm/prefs.json` (`model`), so the same choice applies to single ▶, Run selected /
 Run all and unattended runs. The same picker sits beside **▶▶ Run in Project** and in Latest todos. It writes
 that same global setting, so changing it in one place changes it everywhere. Resumed sessions keep the model
@@ -293,7 +299,7 @@ listed) and press **▶▶ Run selected**.
 
 ### Unattended relay (macOS only)
 
-Batch runs go through a relay unless you untick **Unattended**. It runs the orchestrator
+Batch runs go through a relay only when you tick **Unattended** (off by default: it keeps spending while you're away; the choice is remembered per browser). It runs the orchestrator
 headless (`claude -p`, `acceptEdits`, `Bash(git *)` denied) and:
 
 - near a limit (5-hour usage ≥ 90% or 7-day ≥ 95%) it asks the session for a short plain-text

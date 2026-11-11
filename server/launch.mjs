@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PM_ROOT, settingsArgs } from "./paths.mjs";
 import { newRunId, markPrompt, registerRun } from "./tokens.mjs";
-import { ARCH, claudeBin, modelArg } from "./setup.mjs";
+import { ARCH, claudeBin, modelArg, maxBudgetUsd, SUBAGENT_MODEL } from "./setup.mjs";
 import { relayDir, specPathFor, writeJson, pruneRelay, BACKLOG_CLI } from "./relay.mjs";
 
 const DRYRUN = process.env.PM_LAUNCH_DRYRUN === "1";
@@ -391,6 +391,7 @@ const RUN_NOTE_ASK = [
 // single subagents running 100+ turns (~10M cache-read tokens each), re-running the same test
 // file 7x and re-reading screenshots — each turn re-sends the whole context.
 const SUBAGENT_BRIEF = [
+  "Spawn every subagent with model \"sonnet\" (\"haiku\" for the docs pass), never the orchestrator's own model.",
   "SUBAGENT BRIEF — include these lines verbatim in every subagent prompt you write:",
   "  - One todo only. Budget ~40 tool calls; if the todo is bigger, land a coherent slice,",
   "    report exactly what's left, and stop (the orchestrator spawns a follow-up).",
@@ -632,6 +633,8 @@ function writeRelaySpec({ cwd, prompt, label, tasks, fill }) {
     tasks: tasks.map((t) => ({ slug: t.slug, title: t.title })),
     ...(fill ? { fill } : {}),
     ...(modelArg() ? { modelArg: modelArg() } : {}),
+    modelEnv: { CLAUDE_CODE_SUBAGENT_MODEL: SUBAGENT_MODEL },
+    maxBudgetUsd: maxBudgetUsd(),
   });
   return { id, specPath };
 }
@@ -644,7 +647,7 @@ export function launchRelay(args) {
   }).then((r) => ({ ...r, relay: true, job: id }));
 }
 
-const claudeCmd = () => ARCH + shq(claudeBin()).replace(/^'(claude)'$/, "$1") + " ";
+const claudeCmd = () => `CLAUDE_CODE_SUBAGENT_MODEL=${SUBAGENT_MODEL} ` + ARCH + shq(claudeBin()).replace(/^'(claude)'$/, "$1") + " ";
 const modelFlag = () => (modelArg() ? `--model ${shq(modelArg())} ` : "");
 const settingsFlags = () => settingsArgs().map((a) => shq(a) + " ").join("");
 

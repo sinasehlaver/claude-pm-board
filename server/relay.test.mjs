@@ -155,7 +155,7 @@ import { readFileSync, writeFileSync, appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
 const resume = args.includes("--resume") ? args[args.indexOf("--resume") + 1] : null;
 let prompt = ""; for await (const c of process.stdin) prompt += c;
-appendFileSync(process.env.FAKE_LOG, JSON.stringify({ args, prompt, model: process.env.ANTHROPIC_MODEL }) + "\\n");
+appendFileSync(process.env.FAKE_LOG, JSON.stringify({ args, prompt, model: process.env.ANTHROPIC_MODEL, sub: process.env.CLAUDE_CODE_SUBAGENT_MODEL }) + "\\n");
 const out = (o) => console.log(JSON.stringify(o));
 const sid = "sess-1234";
 out({ type: "system", subtype: "init", session_id: sid });
@@ -180,6 +180,8 @@ if (process.env.FAKE_MODE === "handoff") {
 } else if (!resume && process.env.FAKE_MODE === "soft") {
   out({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", rateLimitType: "five_hour", resetsAt: soon, unifiedWindows: { five_hour: { utilization: 0.97, resetsAt: soon } } }, session_id: sid });
   setInterval(() => {}, 1000); // hang until the relay stops us
+} else if (process.env.FAKE_MODE === "budget") {
+  out({ type: "result", subtype: "success", is_error: false, result: "partial", total_cost_usd: 30, session_id: sid });
 } else if (process.env.FAKE_MODE === "fill") {
   out({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day", resetsAt: soon, unifiedWindows: { seven_day: { utilization: 0.5, resetsAt: soon + 86400 } } }, session_id: sid });
   setInterval(() => {}, 1000);
@@ -355,4 +357,20 @@ test("e2e: a prompt that mentions a skill keeps slash commands (skills) availabl
   const { calls } = await e2e("plain", "use the grill-with-docs skill on this");
   assert.ok(!calls[0].args.includes("--disable-slash-commands"));
   assert.ok(calls[0].args.includes("--strict-mcp-config"));
+});
+
+test("e2e: spend cap — passes --max-budget-usd, subagent model env, and ends 'budget' once spent", async () => {
+  const { job, calls } = await e2e("budget", "original prompt", { maxBudgetUsd: 25, modelEnv: { CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" } });
+  assert.equal(job.status, "budget");
+  assert.equal(calls.length, 1); // no nudge/resume after the cap
+  assert.deepEqual(calls[0].args.slice(calls[0].args.indexOf("--max-budget-usd"), calls[0].args.indexOf("--max-budget-usd") + 2), ["--max-budget-usd", "25.00"]);
+  assert.equal(calls[0].sub, "sonnet");
+  assert.equal(job.costUsd, 30);
+});
+
+test("budgetLeft: no cap = null, else cap minus spent, floored at 0", () => {
+  assert.equal(R.budgetLeft({}, 5), null);
+  assert.equal(R.budgetLeft({ maxBudgetUsd: null }, 5), null);
+  assert.equal(R.budgetLeft({ maxBudgetUsd: 25 }, 10), 15);
+  assert.equal(R.budgetLeft({ maxBudgetUsd: 25 }, 40), 0);
 });
